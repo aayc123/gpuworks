@@ -63,6 +63,16 @@ specs:
   - --trust-remote-code
   - --dtype
   - bfloat16
+  # Keep --enforce-eager: CUDA graph capture fails for this model.
+  # Engine: vLLM 0.30.0, torch 2.13.0+cu130 (runner cuda13.0-vllm0.30.0-r4).
+  # Failure condition: any launch without --enforce-eager (2/2 on one H20-3e,
+  # 2026-11-18). vLLM runs the model through the Transformers backend
+  # (hunyuan_v1_dense), falls back to cudagraph_mode FULL_DECODE_ONLY, and the
+  # engine exits at startup in profile_cudagraph_memory before the first graph
+  # is captured: RoPE dynamic_frequency_update (rope_type=dynamic) raises
+  # "CUDA error: operation not permitted when stream is capturing".
+  # Not an OOM (139 GiB free, fails before KV cache allocation).
+  # Re-check after a vLLM/transformers bump: launch once without this flag.
   - --enforce-eager
   api:
     health_endpoint: /health

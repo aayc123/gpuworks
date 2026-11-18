@@ -468,3 +468,62 @@ job：`l4-gitee-ascend-partition-capability` 与 `l4-gitee-ascend-deploy-chat`�
 所有权校验调用只要出现一次瞬时 GET 失败，整个清理流程就会中止，留下一个
 真实计费中的实例继续运行（在本次会话的验证运行中命中过一次，已手动处理）。
 `get()` 现在会以线性退避最多重试 3 次。
+
+## issue #35：`hy-mt2-1.8b` NVIDIA 通用档能否取消强制 eager
+
+- 状态：完成（结论：保留 `--enforce-eager` 并补注释；仅限下述已测组合）
+- 日期：2026-11-18
+- 范围：`tencent-hunyuan/hy-mt2-1.8b` 的 `bf16-vllm-nvidia-general` 档；
+  代码提交 `4c31c09c`；镜像 `gpuworks/gpuworks-runner:cuda13.0-vllm0.30.0-r4`
+  （ID `sha256:cc8079ab991e…`，vLLM 0.30.0，torch 2.13.0+cu130）；
+  权重 `Tencent-Hunyuan/Hy-MT2-1.8B-09fd81b4…`（只读挂载）；
+  单张 H20-3e（物理 GPU 1，`GPU-4c69677e-…`）。未覆盖其他 NVIDIA 卡型和其他镜像版本。
+
+### 参数链路
+
+模板 `args` 里的 `--enforce-eager` 是该档 eager 的唯一来源。PR #32（`2d0895ee`）之后
+`enforce_eager` 是可选布尔值，`deploy/vllm.go` 只在显式为 true 时输出该参数，字典默认值
+不参与物化；用 `ResolveLaunchWithWarnings` 渲染去掉该参数后的档位，argv 中不再出现
+`--enforce-eager`，也没有 wrapper 或硬件默认值把它加回来。因此 A/B 两组的差别确实只有这一个参数。
+vLLM 0.30.0 的 `--enforce-eager` 同时关闭 torch.compile 和 CUDA Graph；不过该模型本身
+不支持 torch.compile（日志 `vllm.py:3328`）。没有合约测试固定这一档的 eager 参数。
+
+### 实验
+
+两组除 `--enforce-eager` 外完全相同：host 网络、`--shm-size 16G`、
+`--tensor-parallel-size 1 --scheduling-policy priority --enable-prompt-tokens-details
+--enable-per-request-metrics --max-model-len auto --gpu-memory-utilization 0.9
+--trust-remote-code --dtype bfloat16`。
+
+- A（原模板，eager）：启动成功，163 s 就绪（含首次从 NFS 读权重）；`max_model_len` 自动取
+  262144；就绪后显存 131,997 MiB，压测后 137,137 MiB。8 条固定翻译样例（中/英/日/法/德，
+  长短各半，temperature 0）输出非空、语言正确、无乱码或重复。
+  `gpuworks-agent bench`（random，ISL128/OSL128，ignore-eos，预热后 3 轮）：
+
+  | 并发 | 成功请求 | 输出 tok/s（3 轮） | TTFT p50 | TPOT p50 | 完成时延 p50 |
+  |---|---|---|---|---|---|
+  | 1 | 8/8 ×3 | 44.1 / 47.6 / 44.1 | 46–52 ms | 20.2–22.3 ms | 2.63–2.89 s |
+  | 8 | 64/64 ×3 | 333.0 / 341.0 / 338.4 | 89–91 ms | 23.2–23.7 ms | 3.03–3.10 s |
+
+- B（去掉 `--enforce-eager`）：连续两次启动失败，现象一致，约 80 s 后引擎退出，没有到达
+  就绪，因此没有图捕获成功、replay、输出或性能数据。vLLM 先把图模式从
+  `FULL_AND_PIECEWISE` 降为 `FULL_DECODE_ONLY`（`compilation.py:1480`），随后在
+  `profile_cudagraph_memory` → `cudagraph_utils.py:475 capture` 中报错：
+  `transformers/modeling_rope_utils.py:100 dynamic_frequency_update` 的
+  `if seq_len > max_seq_len_cached` 触发
+  `torch.AcceleratorError: CUDA error: operation not permitted when stream is capturing`
+  （`cudaErrorStreamCaptureUnsupported`）。失败发生在 KV cache 分配之前，当时该卡
+  139 GiB 空闲，排除显存不足；参数、挂载与 A 相同，排除参数冲突和挂载问题。
+
+### 结论
+
+该模型在此镜像中走 transformers 的 `hunyuan_v1_dense` 实现，其 RoPE 动态频率更新在图捕获
+期间做了不被允许的同步操作，属于图捕获兼容性问题。保留 `--enforce-eager`，已在模板该参数旁
+补注释，未改测试。未做的事：没有尝试 `-cc.cudagraph_mode=none`（等价于当前 eager，无收益）
+或修改模型代码绕过。之后若 runner 升级了 vLLM/transformers，最小复验动作是去掉该参数启动一次，
+看 `profile_cudagraph_memory` 是否通过。
+
+实验脚本、实际命令、样例输出、压测原始输出和两次失败日志保存在仓库外的
+`/root/gpuworks-issue35/exp/`（`launch.sh`、`cmd-A.txt`、`cmd-B.txt`、
+`samples-A.json`、`bench-A-*.out`、`log-A.txt`、`log-B-fail1.txt`、`log-B-fail2.txt`）。
+实验容器 `issue35-hymt2-A/B` 已删除，其他 vLLM 服务未受影响。
