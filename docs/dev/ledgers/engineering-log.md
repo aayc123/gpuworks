@@ -469,61 +469,35 @@ job：`l4-gitee-ascend-partition-capability` 与 `l4-gitee-ascend-deploy-chat`�
 真实计费中的实例继续运行（在本次会话的验证运行中命中过一次，已手动处理）。
 `get()` 现在会以线性退避最多重试 3 次。
 
-## issue #35：`hy-mt2-1.8b` NVIDIA 通用档能否取消强制 eager
+## 优化 NVIDIA 推理模板中仍强制关闭 CUDA Graph 的档位
 
-- 状态：完成（结论：保留 `--enforce-eager` 并补注释；仅限下述已测组合）
-- 日期：2026-11-18
-- 范围：`tencent-hunyuan/hy-mt2-1.8b` 的 `bf16-vllm-nvidia-general` 档；
-  代码提交 `4c31c09c`；镜像 `gpuworks/gpuworks-runner:cuda13.0-vllm0.30.0-r4`
-  （ID `sha256:cc8079ab991e…`，vLLM 0.30.0，torch 2.13.0+cu130）；
-  权重 `Tencent-Hunyuan/Hy-MT2-1.8B-09fd81b4…`（只读挂载）；
-  单张 H20-3e（物理 GPU 1，`GPU-4c69677e-…`）。未覆盖其他 NVIDIA 卡型和其他镜像版本。
+- 状态：部分完成（PARTIAL；下表 5 个模型的模板已处理，其余仍带 `--enforce-eager`
+  的 NVIDIA 档位尚未改动）
+- 日期：2026-11-18 至 2026-11-20
+- 范围：issue #35；`internal/server/inferencecatalog/seed/catalog/models/` 下
+  `tencent-hunyuan/hy-mt2-1.8b`、`tencent/hunyuanocr`、`inclusionai/llada2.1-flash`、
+  `inclusionai/llada2.1-mini`、`poolside/laguna-s-2.1` 的模板及对应契约测试。
+  结论只对下表列出的卡型和引擎版本成立。
 
-### 参数链路
+| 模型 / 档位 | 机器与卡 | 引擎 | 结论 | 最终改动 |
+|---|---|---|---|---|
+| `tencent-hunyuan/hy-mt2-1.8b` / `bf16-vllm-nvidia-general` | 8 卡 H20-3e 测试节点，单卡，TP1 | `cuda13.0-vllm0.30.0-r4`（vLLM 0.30.0，torch 2.13.0+cu130） | 不能开图：去掉 `--enforce-eager` 后 2/2 启动失败 | 保留 `--enforce-eager`，在模板里注明失败条件、引擎版本和复验方法 |
+| `tencent/hunyuanocr` / `bf16-vllm-nvidia-general` | 同一节点，单张 H20-3e，TP1 | `cuda13.0-vllm0.30.0-r4`（vLLM 0.30.0，transformers 5.17.0） | 不能开图：2/2 启动失败，报错同上 | 保留 `--enforce-eager` 并加同样的注释；删除 ModelScope 权重源 |
+| `inclusionai/llada2.1-flash` / `bf16-sglang-nvidia-general` | 2 张 H20，TP2 | `cuda13.0-sglang0.5.21-r2`（SGLang 0.5.21） | 可以开图，需限制 decode 图的捕获批大小 | `--disable-cuda-graph` 换成 `--cuda-graph-max-bs-decode 16` |
+| `inclusionai/llada2.1-mini` / `bf16-sglang-nvidia-general` | 另一台机器，2 张 RTX 3090，TP2 | `cuda13.0-sglang0.5.21-r2`（SGLang 0.5.21） | decode 图可以开（限批大小），prefill 图仍须关闭 | `--disable-cuda-graph` 换成 `--cuda-graph-backend-prefill disabled --cuda-graph-max-bs-decode 8` |
+| `poolside/laguna-s-2.1` / `int4-sglang-nvidia-general` | H20（卡数未记录） | `cuda13.0-sglang0.5.21-r2`（SGLang 0.5.21） | 可以开图 | 删除 `--disable-cuda-graph`，`--mem-fraction-static 0.75` 不变 |
 
-模板 `args` 里的 `--enforce-eager` 是该档 eager 的唯一来源。PR #32（`2d0895ee`）之后
-`enforce_eager` 是可选布尔值，`deploy/vllm.go` 只在显式为 true 时输出该参数，字典默认值
-不参与物化；用 `ResolveLaunchWithWarnings` 渲染去掉该参数后的档位，argv 中不再出现
-`--enforce-eager`，也没有 wrapper 或硬件默认值把它加回来。因此 A/B 两组的差别确实只有这一个参数。
-vLLM 0.30.0 的 `--enforce-eager` 同时关闭 torch.compile 和 CUDA Graph；不过该模型本身
-不支持 torch.compile（日志 `vllm.py:3328`）。没有合约测试固定这一档的 eager 参数。
+补充说明：
 
-### 实验
-
-两组除 `--enforce-eager` 外完全相同：host 网络、`--shm-size 16G`、
-`--tensor-parallel-size 1 --scheduling-policy priority --enable-prompt-tokens-details
---enable-per-request-metrics --max-model-len auto --gpu-memory-utilization 0.9
---trust-remote-code --dtype bfloat16`。
-
-- A（原模板，eager）：启动成功，163 s 就绪（含首次从 NFS 读权重）；`max_model_len` 自动取
-  262144；就绪后显存 131,997 MiB，压测后 137,137 MiB。8 条固定翻译样例（中/英/日/法/德，
-  长短各半，temperature 0）输出非空、语言正确、无乱码或重复。
-  `gpuworks-agent bench`（random，ISL128/OSL128，ignore-eos，预热后 3 轮）：
-
-  | 并发 | 成功请求 | 输出 tok/s（3 轮） | TTFT p50 | TPOT p50 | 完成时延 p50 |
-  |---|---|---|---|---|---|
-  | 1 | 8/8 ×3 | 44.1 / 47.6 / 44.1 | 46–52 ms | 20.2–22.3 ms | 2.63–2.89 s |
-  | 8 | 64/64 ×3 | 333.0 / 341.0 / 338.4 | 89–91 ms | 23.2–23.7 ms | 3.03–3.10 s |
-
-- B（去掉 `--enforce-eager`）：连续两次启动失败，现象一致，约 80 s 后引擎退出，没有到达
-  就绪，因此没有图捕获成功、replay、输出或性能数据。vLLM 先把图模式从
-  `FULL_AND_PIECEWISE` 降为 `FULL_DECODE_ONLY`（`compilation.py:1480`），随后在
-  `profile_cudagraph_memory` → `cudagraph_utils.py:475 capture` 中报错：
-  `transformers/modeling_rope_utils.py:100 dynamic_frequency_update` 的
-  `if seq_len > max_seq_len_cached` 触发
-  `torch.AcceleratorError: CUDA error: operation not permitted when stream is capturing`
-  （`cudaErrorStreamCaptureUnsupported`）。失败发生在 KV cache 分配之前，当时该卡
-  139 GiB 空闲，排除显存不足；参数、挂载与 A 相同，排除参数冲突和挂载问题。
-
-### 结论
-
-该模型在此镜像中走 transformers 的 `hunyuan_v1_dense` 实现，其 RoPE 动态频率更新在图捕获
-期间做了不被允许的同步操作，属于图捕获兼容性问题。保留 `--enforce-eager`，已在模板该参数旁
-补注释，未改测试。未做的事：没有尝试 `-cc.cudagraph_mode=none`（等价于当前 eager，无收益）
-或修改模型代码绕过。之后若 runner 升级了 vLLM/transformers，最小复验动作是去掉该参数启动一次，
-看 `profile_cudagraph_memory` 是否通过。
-
-实验脚本、实际命令、样例输出、压测原始输出和两次失败日志保存在仓库外的
-`/root/gpuworks-issue35/exp/`（`launch.sh`、`cmd-A.txt`、`cmd-B.txt`、
-`samples-A.json`、`bench-A-*.out`、`log-A.txt`、`log-B-fail1.txt`、`log-B-fail2.txt`）。
-实验容器 `issue35-hymt2-A/B` 已删除，其他 vLLM 服务未受影响。
+- 两个混元模型失败的原因相同：vLLM 对它们走 Transformers 通用后端，RoPE 的
+  `dynamic_frequency_update` 在图捕获期间触发
+  `CUDA error: operation not permitted when stream is capturing`，引擎在启动阶段退出。
+  runner 升级 vLLM 或 transformers 后，去掉 `--enforce-eager` 启动一次即可复验。
+- HunyuanOCR 删除 ModelScope 权重源，是因为该仓库仍是首发版文件，
+  `tokenizer_config.json` 缺少 `image_token` 映射，vLLM 启动时报
+  `Tokenizer is missing required attribute 'image_token'`；现在两个档位只保留 Hugging Face 源，
+  由 `TestHunyuanOCRDoesNotOfferTheStaleModelScopeSnapshot` 守护。
+- LLaDA 两个档位原先关图是因为不限批大小时捕获规模过大；调大批大小上限或打开 mini 的
+  prefill 图之前需要重新验证。`TestLLaDAA100UsesTheCompatibleMoERouter` 与
+  `TestLagunaSLeavesHeadroomForA100KernelWarmup` 已改为断言新参数。
+- LLaDA 两个档位的 PPU 档和 Laguna-S 的其他档位没有验证，未改动。
