@@ -30,6 +30,15 @@ specs:
   - --limit-mm-per-prompt
   - '{"image":1,"video":0}'
   - --trust-remote-code
+  # Keep --enforce-eager: CUDA graph capture fails for this model.
+  # Engine: vLLM 0.30.0, transformers 5.17.0 (runner cuda13.0-vllm0.30.0-r4).
+  # Failure condition: any launch without --enforce-eager (2/2 on one H20-3e,
+  # 2026-11-19, HF rev 47644ecc). vLLM runs the model through the Transformers
+  # backend (hunyuan_vl), falls back to cudagraph_mode FULL_DECODE_ONLY, and
+  # the engine exits at startup while capturing the first graph: RoPE
+  # dynamic_frequency_update raises
+  # "CUDA error: operation not permitted when stream is capturing".
+  # Re-check after a vLLM/transformers bump: launch once without this flag.
   - --enforce-eager
   api:
     health_endpoint: /health
