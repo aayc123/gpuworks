@@ -480,8 +480,10 @@ real billable instance running (encountered once during this session's validatio
 - Date: 2026-11-18 to 2026-11-20
 - Scope: issue #35; the templates of `tencent-hunyuan/hy-mt2-1.8b`, `tencent/hunyuanocr`, `inclusionai/llada2.1-flash`,
   `inclusionai/llada2.1-mini`, and `poolside/laguna-s-2.1` under
-  `internal/server/inferencecatalog/seed/catalog/models/`, plus the corresponding contract tests.
-  The conclusions hold only for the GPU models and engine versions listed in the table.
+  `internal/server/inferencecatalog/seed/catalog/models/`, plus the corresponding contract tests; in addition,
+  `openmoss-team/moss-tts`, `openmoss-team/moss-soundeffect`, and `openmoss-team/moss-voicegenerator` gained a
+  single-GPU placement constraint (their graph switches are unchanged). The conclusions hold only for the GPU models
+  and engine versions listed in the table.
 
 | Model / profile | Machine and GPUs | Engine | Conclusion | Final change |
 |---|---|---|---|---|
@@ -504,6 +506,16 @@ Additional notes:
 - The two LLaDA profiles used to disable graphs because uncapped capture was too large; re-verify before raising the
   batch cap or enabling prefill graphs for mini. `TestLLaDAA100UsesTheCompatibleMoERouter` and
   `TestLagunaSLeavesHeadroomForA100KernelWarmup` now assert the new arguments.
-- The PPU profiles of the two LLaDA models and the other Laguna-S profiles were not verified and are unchanged.
+- The other Laguna-S profiles were not verified and are unchanged.
+- The reason the two Hunyuan models keep `--enforce-eager` is now also stated in each profile's
+  `performance_tradeoffs` (`model_architecture_requires`), and `perf_tradeoff_budget.txt` loses the matching 3 lines.
+  The former `--disable-cuda-graph` reasons of the two LLaDA profiles and Laguna-S are removed together with the flag.
+- The three MOSS profiles (`bf16-vllm-nvidia-general`) gained a `placement.resolver` that allows one GPU only. Stage 0
+  of their deploy configs declares one device, while the scheduler answers a card that is too small with 2 cards and
+  `--tensor-parallel-size 2`, so the engine exits at startup (reproduced once each by platform deployments of MOSS-TTS
+  and MOSS-SoundEffect on 2026-11-19). With the constraint, a card that is too small is answered by a larger card or
+  node, or by a refusal at scheduling time, guarded by `TestMossDelaySpecsAreScheduledOnOneGPU`; the constraint was
+  only exercised through trial scheduling, not by redeploying on a node with 24 GiB cards. These three profiles
+  capture graphs on H20-3e in measurement, but their templates are not changed yet.
 
-<!-- translation-source-sha256: 67eef1295293eee9d2c796c39097e3fac63a3a8fc891e17a98bf4d44a3c69948 -->
+<!-- translation-source-sha256: f83145ad8ce0e374c0db3b86b4bed4447f35ab080549f58cfca32ac56be47eb0 -->

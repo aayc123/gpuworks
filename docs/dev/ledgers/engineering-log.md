@@ -476,8 +476,9 @@ job：`l4-gitee-ascend-partition-capability` 与 `l4-gitee-ascend-deploy-chat`�
 - 日期：2026-11-18 至 2026-11-20
 - 范围：issue #35；`internal/server/inferencecatalog/seed/catalog/models/` 下
   `tencent-hunyuan/hy-mt2-1.8b`、`tencent/hunyuanocr`、`inclusionai/llada2.1-flash`、
-  `inclusionai/llada2.1-mini`、`poolside/laguna-s-2.1` 的模板及对应契约测试。
-  结论只对下表列出的卡型和引擎版本成立。
+  `inclusionai/llada2.1-mini`、`poolside/laguna-s-2.1` 的模板及对应契约测试；另给
+  `openmoss-team/moss-tts`、`openmoss-team/moss-soundeffect`、`openmoss-team/moss-voicegenerator`
+  加了单卡放置约束（图开关未改）。结论只对下表列出的卡型和引擎版本成立。
 
 | 模型 / 档位 | 机器与卡 | 引擎 | 结论 | 最终改动 |
 |---|---|---|---|---|
@@ -500,4 +501,13 @@ job：`l4-gitee-ascend-partition-capability` 与 `l4-gitee-ascend-deploy-chat`�
 - LLaDA 两个档位原先关图是因为不限批大小时捕获规模过大；调大批大小上限或打开 mini 的
   prefill 图之前需要重新验证。`TestLLaDAA100UsesTheCompatibleMoERouter` 与
   `TestLagunaSLeavesHeadroomForA100KernelWarmup` 已改为断言新参数。
-- LLaDA 两个档位的 PPU 档和 Laguna-S 的其他档位没有验证，未改动。
+- Laguna-S 的其他档位没有验证，未改动。
+- 两个混元模型保留 `--enforce-eager` 的原因同时写进了各档位的 `performance_tradeoffs`
+  （`model_architecture_requires`），`perf_tradeoff_budget.txt` 相应删去 3 行。LLaDA 两个档位和
+  Laguna-S 原有的 `--disable-cuda-graph` 说明随参数一起删除。
+- 三个 MOSS 档位（`bf16-vllm-nvidia-general`）加了限定单卡的 `placement.resolver`。它们的
+  部署配置里 Stage 0 只声明 1 个设备，而调度器在单卡显存不够时会改用 2 张卡并下发
+  `--tensor-parallel-size 2`，引擎在启动阶段退出（2026-11-19 平台部署 MOSS-TTS、MOSS-SoundEffect
+  各复现 1 次）。加约束后单卡放不下时改选显存更大的卡或节点，没有则在调度阶段拒绝，由
+  `TestMossDelaySpecsAreScheduledOnOneGPU` 守护；该约束只做了调度试算，没有在 24 GiB 实卡节点上
+  重新部署。这三个档位在 H20-3e 上实测可以开图，模板尚未改。
