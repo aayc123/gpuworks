@@ -37,7 +37,16 @@ specs:
   - --trust-remote-code
   - --attention-backend
   - flashinfer
-  - --disable-cuda-graph
+  # Decode CUDA graph stays on, capped at batch 8; prefill graph capture is
+  # still disabled because this model needs it off (issue #35).
+  # Verified on SGLang 0.5.21 (runner cuda13.0-sglang0.5.21-r2), 2x RTX 3090,
+  # TP2, with the JIT grouped-top-k router above. This profile used
+  # --disable-cuda-graph before because uncapped capture was too large; keep
+  # the cap, and re-check before raising it or enabling prefill capture.
+  - --cuda-graph-backend-prefill
+  - disabled
+  - --cuda-graph-max-bs-decode
+  - '8'
   api:
     health_endpoint: /health
     operations:

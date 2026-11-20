@@ -37,7 +37,13 @@ specs:
   - --trust-remote-code
   - --attention-backend
   - flashinfer
-  - --disable-cuda-graph
+  # CUDA graph stays on with decode capture capped at batch 16 (issue #35).
+  # Verified on SGLang 0.5.21 (runner cuda13.0-sglang0.5.21-r2), H20, TP2, with
+  # the JIT grouped-top-k router above. This profile used --disable-cuda-graph
+  # before because uncapped capture was too large; keep the cap, and re-check
+  # before raising it.
+  - --cuda-graph-max-bs-decode
+  - '16'
   api:
     health_endpoint: /health
     operations:
