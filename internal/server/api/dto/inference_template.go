@@ -105,6 +105,17 @@ type InferenceSpecDTO struct {
 	// ImageSources are further references the template offers for pulling Image,
 	// preferred first; Image itself is tried after them (ADR 0038).
 	ImageSources []string `json:"image_sources,omitempty"`
+	// Dirs are the writable host directories the platform keeps for a
+	// deployment of the spec on every node (ADR 0077). Omitted when none.
+	Dirs []InferenceManagedDir `json:"dirs,omitempty"`
+}
+
+// InferenceManagedDir is one writable directory a spec declares.
+type InferenceManagedDir struct {
+	Name       string `json:"name"`
+	MountPath  string `json:"mount_path"`
+	LimitBytes int64  `json:"limit_bytes"`
+	Retain     string `json:"retain"`
 }
 
 type InferenceAsset struct {
@@ -133,10 +144,13 @@ type APIContract struct {
 // metric's short name, or {"to": name, "scale": factor} when it is scaled;
 // the editor writes it back as it reads it.
 type APIMetrics struct {
-	Endpoint string                     `json:"endpoint,omitempty"`
-	Format   string                     `json:"format,omitempty"`
-	Inherit  string                     `json:"inherit,omitempty"`
-	Map      map[string]json.RawMessage `json:"map,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	// Port is "separate" when the endpoint listens on a port of its own that
+	// the platform reserves for the instance; absent means the API port.
+	Port    string                     `json:"port,omitempty"`
+	Format  string                     `json:"format,omitempty"`
+	Inherit string                     `json:"inherit,omitempty"`
+	Map     map[string]json.RawMessage `json:"map,omitempty"`
 }
 
 type APIOperation struct {

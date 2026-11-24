@@ -93,8 +93,11 @@ pipelines with `FLEET_REDEPLOY_CHURN=1` (the nightly schedule includes this vari
 causes a failure rather than a skip. Logs from both processes are compressed into a single tar.gz (the 40 separate per-process log files were once rejected by the gateway with 413 on upload) and retained as artifacts for 14 days. Disconnect/reconnect counts and endpoint p99 are currently reported without assertions;
 thresholds will be set after enough nightly runs have accumulated to establish trends. The gateway case also asserts the server's CPU per request
 (`GPUWORKS_GATEWAY_MAX_SERVER_CPU_US_PER_REQUEST`): per-request costs such as database reads or copies add up step by step and only show in throughput and latency once the
-host saturates, while a CPU budget stops each step. The figure depends on the CPU model; the job's budget is set for the slowest runner (a 2.2 GHz Xeon Silver 4210), and a
-faster runner only reads lower.
+host saturates, while a CPU budget stops each step. The figure depends on the CPU model; the job's budget is set for the slowest runner (a 2.2 GHz Xeon Silver 4210).
+It also depends on the server's `GOMAXPROCS`: on a runner with 192 logical CPUs over four NUMA
+nodes, a server using every CPU spends 2.5 times the CPU per request of one on 20, at the same throughput. The case therefore fixes the server process's
+`GOMAXPROCS` at 20 (`GPUWORKS_GATEWAY_SERVER_GOMAXPROCS`; 0 keeps the server's own default),
+so the figure is comparable on any runner, and a faster runner only reads lower.
 
 The multi-process configuration can run with prebuilt binaries. **This is the only way to run it on machines without the Go toolchain**:
 
@@ -305,6 +308,10 @@ each set them from their own built-in variables; unset, the scripts fall back to
 time. `check_ci_yaml.sh` runs the folded-scalar comment check over both CI definitions; the stage-order check
 applies to `.gitlab-ci.yml` only.
 
+Both CI systems run `scripts/test_slurmboot_shellcheck.sh` for Slurm onboarding. It requires ShellCheck 0.9.0 and reruns the POSIX checks against the generated scripts. GitHub runs it on Ubuntu 24.04 in the first Go shard. GitLab's `core-test-image` builds and verifies a Go image with the tool installed on a Docker runner. Projects and forks without a configured image use this check too.
+
+When an image build change lands on the protected default branch, the job publishes to the project's GitLab Container Registry, if enabled, and prints the digest. Set the project CI/CD variable `GPUWORKS_CORE_TEST_IMAGE` to the full `repository@sha256:digest` the runner can pull. The `core-test` job then runs the check in that image. Verify the new image before updating the variable when its recipe changes. Other Go jobs keep using the original image.
+
 - L2/L3 take the shape of GitLab's `.docker-core`: one DinD daemon per job, exposed on a dedicated
   `gpuworks-e2e` socket, with the suite in a golang container. The runner VM's own Docker does not work: the
   VM has systemd, which the console upgrade cases take for a service manager, and the real terminal case
@@ -471,4 +478,19 @@ This guide documents testing methods. Put one-off run logs, screenshots, image d
 `artifacts/work/<YYYY-MM-DD>-<topic>/<topic>-<YYYY-MM-DD>.md` (move them with the topic into
 `artifacts/archive/` when the work is closed out). Current documentation only links to this evidence.
 
-<!-- translation-source-sha256: 8b1c2e03c0f27fb8c861357dda596edbd259714ea3baaef079cf72eab6f4458b -->
+<!-- translation-source-sha256: cf050f579f9e11e63a486c32979a02668bea0ac21fb42e608532ae0ac54cee5b # Testing Guide -->
+<!-- translation-source-sha256: d36f98ad07ab7667a2c11d0c783e088482c87fbca9e924a84390acaf7f677283 ## L1–L4 -->
+<!-- translation-source-sha256: 3ba7708a8ba2ce5ae01ae06e412b83f612d7b50a50e05845477e247314880811 ## Fake Engine Generation Protocol -->
+<!-- translation-source-sha256: 782c3d1b8c729bbd9121868e4807b20bd105e0d998b8fc0fedc574be44091028 ## Load Tests (Outside the Default Suite) -->
+<!-- translation-source-sha256: ea10648bbbf6c3fb314970aa99ad10cc447107683d3819ee90acefd36a9545c7 ### Two Configurations, One Shared Driver -->
+<!-- translation-source-sha256: c79d7d79f17001e4b3619e346b8d86284cd5eaef6a1f150cb33a50890d0b4bda ### Disconnects and Reconnects -->
+<!-- translation-source-sha256: 2d40e123b208041b994b40e1cee382787be77291c0ab8c8f14c38eb24f432e15 ### Single-Process Teardown -->
+<!-- translation-source-sha256: 5c3e60a90cab0e3fbfb98c31b738915fd326f9056c1c12c2f97956fef4febd32 ### List Responses During Onboarding -->
+<!-- translation-source-sha256: 86a7d492ecd7cba3c0d779343b3d51cdcd2187b7075ea9457ac6ddb1578ec2c3 ### Scaling and Prerequisites -->
+<!-- translation-source-sha256: 79d788f9b325de50911bbacf523a0afcf302fb0dc53149802e23a6235b44e64b ## Public Access (expose) -->
+<!-- translation-source-sha256: 17ba151a060cd27a72e3617f168a737818d07bb23a0f2baa00546e99f1f086f9 ## Architecture Gates -->
+<!-- translation-source-sha256: 7f453deca452b26014227f08ffdbd3c26237f7024b30a904a4c19e151c4c7278 ## GitLab MR Pipeline Splitting -->
+<!-- translation-source-sha256: 1644fce8cc809697c63fc6bb838d83ce1359a86babf0169b8cd2d8daee93f632 ## GitHub Actions Mirror Gates -->
+<!-- translation-source-sha256: 28e38a75599bd1817d3814cfe51fe861536e28931c10233529dd45a328e07e95 ## Cost and Caching -->
+<!-- translation-source-sha256: 7c1af2ddf010d809320c9632f09535598f2492152eee78f5d37742a4f8619b59 ### Alibaba Cloud ECS -->
+<!-- translation-source-sha256: c25b0c9497a51fad3f04b547935b0ff2f420a925369f0e3d35e0623f1e8a3568 ## Evidence -->

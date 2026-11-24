@@ -59,6 +59,10 @@ const (
 	ErrorMountContainerPath = "MOUNT_CONTAINER_PATH"
 	ErrorMountHostPath      = "MOUNT_HOST_PATH"
 	ErrorMountTargetNested  = "MOUNT_TARGET_NESTED"
+	// ErrorMountTargetReserved answers a mount target that overlaps a path
+	// the platform mounts its own files at (/gpuworks: the peers file, the
+	// pre-start wrapper). Params: target, reserved.
+	ErrorMountTargetReserved = "MOUNT_TARGET_RESERVED"
 	// ErrorMountModelNotFound answers an extra-mount row naming a model that
 	// is not registered (any more); model_id is the id the row states.
 	ErrorMountModelNotFound = "MOUNT_MODEL_NOT_FOUND"
@@ -74,6 +78,14 @@ const (
 	// (repo_id@revision is the source the spec resolved). The server refuses
 	// the choice rather than substituting another model.
 	ErrorTemplateModelMismatch = "TEMPLATE_MODEL_MISMATCH"
+	// ErrorRankWeightsModelNotRankZero: the request names a model (model_id)
+	// for a spec with rank-scoped weights, and the model is not rank 0's
+	// subfolder (want) of the repository but subfolder: the named model is
+	// what rank 0 mounts.
+	ErrorRankWeightsModelNotRankZero = "RANK_WEIGHTS_MODEL_NOT_RANK_ZERO"
+	// ErrorRankWeightsPDUnsupported: a spec with rank-scoped weights is
+	// deployed as PD, whose roles' ranks do not number one group.
+	ErrorRankWeightsPDUnsupported = "RANK_WEIGHTS_PD_UNSUPPORTED"
 	// ErrorManualCommandRankBlind: a multi-node or PD request's manual
 	// command references none of the variables that tell its launches apart,
 	// so every rank would start as the same rank in the same role. missing
@@ -83,4 +95,16 @@ const (
 	// Cmd outside manual mode. Such an override is one argv every rank would
 	// run as written; only a manual command is expanded per rank.
 	ErrorCommandOverrideRankBlind = "COMMAND_OVERRIDE_RANK_BLIND"
+	// ErrorDistributedParallelismUnavailable: no TP × PP layout fits a manual
+	// multi-node draft that left a degree blank. params.node names the rank
+	// that refused (every node, for no_layout); params.reason is a scheduler
+	// refusal code or a RecommendationReason, and params.reason_params, when
+	// present, that reason's own params.
+	ErrorDistributedParallelismUnavailable = "DISTRIBUTED_PARALLELISM_UNAVAILABLE"
+)
+
+// The values of ErrorDistributedParallelismUnavailable's params.reason that
+// the recommendation itself decides; the UI words each one.
+const (
+	RecommendationReasonNoLayout = "no_layout"
 )

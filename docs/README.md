@@ -110,6 +110,7 @@
 - [架构总览：server、agent 与 yamux](explanation/architecture.md)
 - [runveil 与 udocker：无 docker 节点的容器运行时](explanation/runveil-and-udocker.md)
 - [典型部署拓扑](explanation/topologies.md)
+- [控制面集群的行为与边界](explanation/control-plane-cluster.md)
 - [怎么选：dGPU、sleep/wake、多机、副本、PD](explanation/choosing-features.md)
 - [调度与显存估算](explanation/scheduling-and-estimation.md)
 - [出让策略：几个部署怎样共用一批 GPU](explanation/service-levels.md)

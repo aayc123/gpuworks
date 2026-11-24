@@ -230,18 +230,114 @@ agent writing UI text checks it too.
 | Rule | Detail |
 | --- | --- |
 | One helper line | A field, a value or a block gets at most one line of helper text, 40 Chinese characters or 80 English ones. More goes into a `HelpTip`; past 200 Chinese characters, link the docs instead. |
+| Messages | An error, a warning or a reason names the problem and the next step in at most 80 Chinese characters and two sentences. How the platform got there belongs in the docs. |
 | Never inline | Formulas, aggregation and sampling rules, data sources, internal names (endpoints, packages, file paths the user does not type) and caveats such as "not guaranteed", "does not mean", "for reference only" go into a `HelpTip`. |
 | No stacked caveats | At most one caveat per block, and none when the label already says it: "estimated" needs no "not guaranteed"; a fact shown on the block is not restated as a caveat. |
 | Facts as values | Related numbers share one line, `label value · label value`, not one sentence each. |
 | Warnings act | A warning (`Notice`, amber text) names the problem and the next step in one sentence; text with no next step is not a warning. |
 | Empty states | A title, at most one sentence, and the action. |
+| No chained clauses | A string joins at most two clauses with `；`; a `：` that opens such a chain counts as one more. Three clauses are three sentences written to pass the sentence count: cut, or split into the parts below. |
+
+How the text is written, checked by the reader, not by a budget:
+
+| Rule | Detail |
+| --- | --- |
+| What the user decides with | A page says what the control does and what the user must do. Placement order, retry timing and what a restart does inside the platform go into the docs. |
+| No unasked reassurance | "Does not lose a replica", "changes nothing" and the like are cut. A consequence is written only when the action destroys or interrupts something. |
+| Product words | `rank`, `wrapper`, `runner`, `server_dial`, package and file names the user does not type stay off the page. Commands and config keys the user must type are written as they are typed. |
+| Chinese as Chinese | Chinese text is written for a Chinese reader, not translated clause by clause: 无法访问, not 够不到; 正被使用, not 有东西在用; 平台的, not 我们的; 仍没有节点接入, not 已等了一阵. |
+| The user's side | A title or summary says what the user sees or cannot do, not what the server did or how it files the case: "4 Agents cannot connect: their node credential does not match this server", not "refused for a credential this server does not know"; "14 nodes run an Agent version that differs from the server", not "Agent target 56cb84fa" over "Different build (14)". A bare value is not a title. |
+| Charts explain themselves | What a colour, a line or a shade stands for is a legend entry beside its swatch, or the mark's tooltip. No sentence names a colour ("the black line", "red = error"): the name is wrong in the other theme and unreadable without colour. How the chart is computed is the `HelpTip` beside its title. |
+
+### Problems and what to do
+
+A message about something wrong has up to four parts, always in this order.
+Each part is its own sentence or its own element; a part that has nothing to
+say is left out, not filled.
+
+| Part | Says | Form |
+| --- | --- | --- |
+| Summary | What is wrong, in terms the user can see on the page | One sentence, no cause and no advice. Key `summary`, or the code itself for a one-string message |
+| Impact | What does not work because of it | One sentence, only when the summary does not already say it. Key `impact` |
+| Fix | What the user does | An imperative sentence. A command the user types is a copyable block built by the code or sent by the server, never text inside the sentence. Several ways out or several steps are a list, one key each under `fix` or `step` |
+| After | What the fix interrupts or how long it takes to show | One sentence, only when the fix stops or restarts something. Key `after` |
+
+Which form a message takes follows from where it is shown:
+
+| Shown as | Form |
+| --- | --- |
+| One line: a toast, an API error (`apiError.*`), a scheduling reason, a table cell | One string, at most two sentences: the summary, then the fix. No command longer than a flag or a file name |
+| A `Notice`, a drawer section, a dialog | Separate keys. The summary is the title; impact, fix and after are the body; the action is a button or a copyable block |
+
+Use separate keys whenever one of these holds, whatever the surface:
+
+- the fix is a command the user types;
+- the fix has more than one step, or more than one way out;
+- the same fix answers several summaries (write it once and reuse the key);
+- the component already has a title and a body.
+
+A fix is on the page. A `HelpTip` holds causes and method; a user who never
+hovers still reads what to do. A fix written only in a `HelpTip`, or a command
+inside a sentence, is the fault this section exists to prevent.
+
+A notice that counts things offers the action on them. Its button does the
+fix (opens the batch dialog, the form, the drawer); "Dismiss" alone is not an
+action. A count that filters the list is a link named for what it does ("View
+these nodes"), not a number that happens to be clickable.
+
+Parts shown together are read together: text a component joins from several
+keys counts as one message, and its total follows "One helper line" and
+"Messages" above. Joining five sentences into one paragraph is the same fault
+as writing them in one key.
+
+Existing shapes to copy: `nodes:doctor.finding.<code>.{summary,impact}`,
+`nodes:gpuIsolation.{summary,reason,fix}`, `nodes:slurm.{unavailable,step}`.
 
 A locale key whose name ends in `Help` holds `HelpTip` content and is shown
-only there; text shown on the page uses any other name. `ui_copy_long_strings`
-and `ui_copy_caveat_strings` in `scripts/arch-constraints.txt` (max, ratchet
-down) count Chinese strings over 120 characters (200 for `Help` keys) and
-non-`Help` strings carrying a caveat phrase; a new string over the limit is cut
-or moved into the docs, not covered by a raised budget.
+only there; text shown on the page uses any other name. A `Help` key is
+never a form item's `extra` or the text of a paragraph.
+
+The `ui_copy_*` budgets in `scripts/arch-constraints.txt` (max, ratchet down)
+count what breaks these rules; `node scripts/ui_copy_audit.mjs list` names each
+one. A new string over a limit is cut or moved into the docs, not covered by a
+raised budget, a renamed key or a split key.
+
+| Budget | Counts |
+| --- | --- |
+| `ui_copy_long_strings` | Chinese strings over 120 characters (200 for `Help` keys) |
+| `ui_copy_caveat_strings` | Non-`Help` strings carrying a caveat phrase |
+| `ui_copy_helper_strings` | Non-`Help` page strings over 40 Chinese characters |
+| `ui_copy_message_strings` | Error, warning and reason strings over 80 Chinese characters |
+| `ui_copy_sentences_strings` | Non-`Help` strings of more than two sentences |
+| `ui_copy_clauses_strings` | Non-`Help` strings chaining clauses with `；` past "No chained clauses" |
+| `ui_copy_command_strings` | Strings, `Help` keys included, with a command the user types inside a sentence (a key named `*Command` holds a block's text) |
+| `ui_copy_en_strings` | English strings over 240 characters (400 for `Help` keys) |
+| `ui_copy_inline_help_refs` | Places that put a `Help` key on the page instead of in a `HelpTip` |
+
+### Reviewing copy
+
+The budgets count length and shape. They cannot tell whether a sentence helps,
+and text can pass every one of them and still leave the user without a clue:
+the three strings that prompted this section did. A maintainer reviewing a
+change that adds or edits text under `ui/src/i18n/locales/` reads each string
+where it is shown (the merge request carries a screenshot of a new notice,
+chart or dialog, in both languages) and sends the change back when one of
+these holds. Text written by an agent gets the same reading.
+
+| Ask | Send back when |
+| --- | --- |
+| Would a user who has never seen the code know what is wrong, or what the number means? | The summary is in the server's words (refused, booked, reconciled, a build class, an internal state name), or the title is a bare value. See "The user's side". |
+| Is the next step on the page, and can it be taken there? | The fix is only in a `HelpTip` or the docs; the only button is "Dismiss"; a filtering link reads as a label; a command sits inside a sentence. |
+| Does the chart need a sentence to be read? | A sentence names a colour, a line or a shade, or says how the chart is drawn, outside a legend and a `HelpTip`. |
+| Was a budget passed by shape? | Clauses chained with `；` or `：`; a key renamed `*Help` or `*Command` for the allowance; one message split into keys that are shown together; a raised budget. |
+| Does the count match what it counts? | The title says "N Agents" over a list of N hosts, or a total that the rows below do not add up to. |
+| Do both languages say the same thing, each as its own reader would write it? | One language carries a fact, a caveat or an action the other lacks; see "Chinese as Chinese". |
+
+The rewrite belongs to the same merge request: "copy to be polished later" is
+not a follow-up. Shapes to copy for a notice with its fix and action:
+`nodes:rejects.{summary,causeHelp,fix}` with `RejectedAgentsNotice`, and
+`nodes:fleet.{mismatch,fact,upgradeAll}` with `AgentFleetNotice`; for a chart,
+`gpus:composition` with `GPUMemoryComposition`.
 
 ## Choosing a component
 

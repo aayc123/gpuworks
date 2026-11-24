@@ -183,6 +183,10 @@ Clients first check the HTTP status, then read `code` and `params`. For a generi
 These conventions apply to the management API. For the inference gateway's error format, see [OpenAI-Compatible Gateway](openai-gateway.md). Error codes are defined in
 `internal/server/api/errors.go` and `internal/server/messages` (generic codes in `messages/http.go`). Individual endpoints may also return business-specific error codes.
 
+The cluster enrollment listener also uses `CLUSTER_TLS_REQUIRED` (426, enrollment requires a completed HTTPS handshake), `CLUSTER_REQUEST_INVALID` (400), `CLUSTER_INVITATION_REQUIRED` (401, enrollment needs the invitation bearer), `CLUSTER_IDENTITY_MISMATCH` (409), `CLUSTER_ADMISSION_REJECTED` (403), and `CLUSTER_UNAVAILABLE` (503). Issuing an invitation uses the existing management session; a non-administrator still receives `ADMINISTRATOR_REQUIRED`. While a control-plane cluster upgrades its schema, every member answers business requests (including `/api/v1/readyz`) with 503 `CLUSTER_UPGRADE_IN_PROGRESS` and `Retry-After`; the request was not processed, and the members recover on their own when the upgrade ends.
+
+A member of a control-plane cluster answers 503 (code `SERVICE_UNAVAILABLE`) when it cannot commit a write: only the member holding the database leader can commit it and this member is not that one, or this member's business writes are closed. Nothing is committed, and the cluster entry can send the request to another member. A member that has not opened business answers business paths with 503 and the plain-text body `member business service is not ready`, not JSON.
+
 ## Checks
 
 `make check-api-conventions` performs type checks on `internal/server/api`, identifies the value written by every `writeJSON` / `writeSSE`
@@ -193,5 +197,15 @@ call, and reports:
 
 This check is included in `make test-unit`.
 
-<!-- translation-source-sha256: e2bda9af30c4ebf9224b33165c7eb2a3db50322778468b87776098bdb9ea2b9f -->
+<!-- translation-source-sha256: 9430ec1d83972f42a839d9a62667c21c0b2c4958de6d971ca86affe1f9247305 # HTTP API Conventions -->
+<!-- translation-source-sha256: 4eedc84c97a083698f30bb59136ba3a9e08cd89a5611541a493d9654395a8762 ## Example: Sign In and Query the Inference Service List -->
+<!-- translation-source-sha256: 8d2742a2083cf96a822ce3c5a005fb3891cf9e0f527914ade32b9fe192f518bb ### 1. Set the address and sign in -->
+<!-- translation-source-sha256: ddbb1404108c865cad52751d004f8438237ad649fdbaca37901f25fcdfdbd356 ### 2. Query the deployment list -->
+<!-- translation-source-sha256: f98a51cc0720b18e83462d778d5ddef4dc184a1f124804888469462360d88af3 ### 3. Query deployment details -->
+<!-- translation-source-sha256: b2b28f9336d8fdf644052737b8bc8b5ee59c2c607cfd8436b6e796987801f4fa ## Field Naming -->
+<!-- translation-source-sha256: 91f772294d3153eda1852c479296e5d88259cadd4a779ade09b249f546cda4f2 ## Collections -->
+<!-- translation-source-sha256: f48d1e262baadf4e58cd76b542e243659f052e731b0b0c9089ff9ec9f5f92d51 ## Opaque Fields -->
+<!-- translation-source-sha256: 45246930eb15fb28bdee8f1e45cdc066df26656c641684fb62651b59316c2f53 ## Errors -->
+<!-- translation-source-sha256: a37a4acd1e93e90eec106457859d9276dffe3e93770dbfba52ca6b7232db4ddc ### Common HTTP Statuses and Error Codes -->
+<!-- translation-source-sha256: bdd75ee5112cec32ed080569cff9a49c8a785efea72efb8951bb812243add9a4 ## Checks -->
 <!-- translation-localized-code-block: bae0e4c7d262a34ee3ef790d5e20acb056000102304e33d31fffd72989b4b11c 575be17f25555cdcb9a913a995f63b3814eab0f2391908631ca49f5fa2d37787 Translate password input prompt -->

@@ -68,6 +68,7 @@ Stored names use `gpuworks_proxy_<short-name>`, with the labels `deployment` and
 
 | Short Name | Type | Unit | Meaning |
 |---|---|---|---|
+| `cache_reported_prompt_tokens_total` | counter | tokens | Input tokens of the requests whose response `usage` stated a cache hit count (0 included); the denominator of the gateway cache hit rate, see below |
 | `cached_tokens_total` | counter | tokens | Cached input tokens reported by the engine in response `usage` |
 | `completion_tokens_total` | counter | tokens | Output tokens reported by the engine in response `usage` |
 | `prompt_tokens_total` | counter | tokens | Input tokens reported by the engine in response `usage` |
@@ -111,6 +112,15 @@ Cache hit counts come from `usage.prompt_tokens_details.cached_tokens`. When the
 - When vLLM has `--enable-prompt-tokens-details` enabled, it includes the field even when there are 0 hits.
 - In all other cases, an absent field means unknown; the request is excluded from the "Uncached input × TTFT" distribution.
 
+### Gateway Cache Hit Rate
+
+When the engine exports no prefix-cache metrics (callable engines such as Strata), the gateway supplies the KV Cache hit rate shown in monitoring: the window's increase in `cached_tokens_total` divided by the window's increase in `cache_reported_prompt_tokens_total`.
+
+- **The denominator includes only requests that stated a cache hit count.** A response with no `usage`, or whose `usage` has no cache field (unknown, not 0), adds its input tokens to `prompt_tokens_total` but not to `cache_reported_prompt_tokens_total`, so it is never counted as a 0% hit. A response that explicitly reports 0 adds its input to the denominator with no hits.
+- If no request in the window stated a cache hit count, there is no hit rate: panels show "no data", not 0%. Data written before this series existed has no denominator and likewise yields no value.
+- When the engine itself exports hit/query counters or an instantaneous hit rate, the engine's value is used and the gateway's is ignored.
+- The gateway only has a deployment-wide figure: the replica table's hit rate column still shows only what the engine reports per replica, and the hit rate line in the KV Cache chart is one deployment-wide line rather than one per replica.
+
 ### How Gateway TTFT Is Measured
 
 **Gateway TTFT (time to first token) differs from the engine's `ttft_seconds` measurement**: the gateway starts timing when it hands the request to the instance, including queue and network time.
@@ -126,6 +136,8 @@ The first token is the first nonempty `content`, `reasoning_content`, `reasoning
 - For callable engines (TensorFold, Strata, and others), the gateway records all four.
 
 `tpot_ms` requires a streaming response with `usage` and at least 2 output tokens. It measures from the first generated token observed by the gateway to the last text event, including network jitter. When the engine emits multiple tokens at once (speculative decoding), the time is still averaged by token count.
+
+The cache hit rate uses the same source mechanism but is not a histogram: see [Gateway Cache Hit Rate](#gateway-cache-hit-rate).
 
 `reported_*_ms` aggregates engine-reported values in responses ([per-request statistics](#逐请求统计)) into per-deployment distributions. If a response does not include a value, nothing is recorded.
 
@@ -169,4 +181,16 @@ waiting as `timings.queue_ms` in the same response. It excludes model loading an
 monitoring. Update the deployment and recreate old instances to emit the field. For pinned source evidence and integration
 constraints, see [Observability Limits of Per-Request Engine Queue Time](../dev/engine-queue-observation.md).
 
-<!-- translation-source-sha256: bb5058260bf7cd3d49619c7866831f48a3735883704890349186b6c22f3b107c -->
+<!-- translation-source-sha256: 7fadd3cf73941c05c92b3fa3c4864fd25dee5e43bbcc01c75cbc1447ed0d4634 # Inference Metric Vocabulary -->
+<!-- translation-source-sha256: 3031eccf90cc23e08b9fa11031f6f4f6a6145abf8fbf19056409423ca6015c18 ## Types -->
+<!-- translation-source-sha256: 563ce5377c850cf3fdb563585b05b5a2c6a20ad6871ccf8639e47e01c632c824 ## Metrics -->
+<!-- translation-source-sha256: 5e28113490cac7cd8c98a87dcf66ab36fa61539fdb8b275a54d0c59b635715bb ## Gateway Metrics -->
+<!-- translation-source-sha256: dbec721fce9f31af554ff970ea4bab151f26f27192f81cef78096c0cbbcbee3a ### Reading and Counting Token Usage -->
+<!-- translation-source-sha256: c153f3db5c80e36ff3b165fe87481b8faa81822e224bf41053e7788a16f92fea ### When a Response Counts as Complete -->
+<!-- translation-source-sha256: 636178d40d678ec316b47f6780b70db3138510799bb23030785d2960568ee53a ### Cache Hit Counts -->
+<!-- translation-source-sha256: daac19e9bb421aa66715733987898b6f53a33e42c656fedc7a36150b5ef746af ### Gateway Cache Hit Rate -->
+<!-- translation-source-sha256: bcb357781edac31e9ae9afebf52be11ded914efbdf8d919fa374c26b1e867c62 ### How Gateway TTFT Is Measured -->
+<!-- translation-source-sha256: fc108ae84f61072563893cd95004a451bc6e9e6cc50c31cb8ce6e19ceba92056 ### Fallback Statistics for Missing Engine Metrics -->
+<!-- translation-source-sha256: b07099a79db4e7e21c6269a0dd08a61f2c7ba7409db5e1e232bf49644e62f8ad ## Per-Request Statistics -->
+<!-- translation-source-sha256: 12aa9261efac05022b5132e126caeea3fd620f8baed5ee72b958a2e9f2561182 ## Derived Metrics -->
+<!-- translation-source-sha256: b489b96b9cb069342edb24a7bee7f8299e5e443dc7d2d7e480ba1340fd8a89b0 ### Queued Request Counts and Per-Request Queue Duration -->

@@ -39,7 +39,7 @@ use text matching or `json_extract`, with results that depend on serialization d
      that adjacent rows differ in state or phase (events are appended only when either changes). Collapsing applies only to historical progress rows written by older versions,
      which retention eventually removes. Permanently adding two columns for a transitional read-side transform is exactly what decision 1 is meant to prevent.
 6. **Enforce this with three ratchet budgets** (`scripts/arch-constraints.md`): `store_text_columns` caps the total number of columns that can hold JSON
-   (`type:text` columns plus fixed-length columns whose comments declare JSON). Adding one requires raising the cap and explaining in `# raised:` why it cannot be a typed column.
+   (`type:text` columns plus fixed-length columns whose comments declare JSON). Adding one requires raising the cap and explaining in its loosening record in `scripts/arch-constraints.md` why it cannot be a typed column.
    `store_text_columns_undocumented` requires comments on all these columns. `store_sql_json_lines` caps SQL lines that inspect JSON outside migrations
    (JSON functions, `instr(`, and `->` / `->>` operators; comment lines do not count). The only current exception is the timeline collapsing above.
    The script cannot detect JSON in fixed-length columns whose comments do not mention it, or `LIKE` text matching on JSON columns; review must catch these.
@@ -56,4 +56,7 @@ use text matching or `json_extract`, with results that depend on serialization d
 - This rule applies to every new or modified column. Existing columns that predate the rule and do not meet decision 2 are listed in `todo.md` and remain unchanged until addressed there;
   the budget blocks additions and does not endorse existing columns.
 
-<!-- translation-source-sha256: 16653121ca8612b634913cfd885e4ebf86ab6f24947375866ad1ee9c067024d3 -->
+<!-- translation-source-sha256: 53b8416121d4880bd5a77a6eb760feac0f3ab38841ce42d1889a79461912f865 # ADR 0032: Persist Facts in Typed Columns by Default; Use JSON Columns Only as Opaque Snapshots Read and Written as a Whole -->
+<!-- translation-source-sha256: 51e359542570fd16d1c4c87b2c239bf9f40311aeea572d4b1a47bcabb229848a ## Context -->
+<!-- translation-source-sha256: 29ecd25e1d8160bb119d9231a33fbc05aa9cfc3567a4f06b3393eea214f49586 ## Decision -->
+<!-- translation-source-sha256: 5d234b76febb36136688c50057ece9ea64afca5f457b38bf5ae0ea457fc2c600 ## Consequences -->

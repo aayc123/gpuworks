@@ -198,6 +198,7 @@ GET /api/v1/models/{id}/logo
 GET /api/v1/monitor/deployments/{id}
 GET /api/v1/monitor/deployments/{id}/latency
 GET /api/v1/monitor/deployments/{id}/requests
+GET /api/v1/monitor/deployments/{id}/signals
 GET /api/v1/monitor/distributions
 GET /api/v1/monitor/metrics
 GET /api/v1/monitor/overview
@@ -205,6 +206,7 @@ GET /api/v1/monitor/requests/lookup
 GET /api/v1/monitor/series
 GET /api/v1/networks
 GET /api/v1/networks/{id}
+GET /api/v1/networks/{id}/search
 GET /api/v1/nodes
 GET /api/v1/nodes/facets
 GET /api/v1/nodes/{uuid}
@@ -243,11 +245,11 @@ GET /api/v1/pull/proxies
 GET /api/v1/pull/registry-credentials
 GET /api/v1/pull/source-rules
 GET /api/v1/pull/sync-groups
+GET /api/v1/readyz
 GET /api/v1/routing-policies
 GET /api/v1/scheduling/activity
 GET /api/v1/scheduling/board
 GET /api/v1/scheduling/history
-GET /api/v1/scheduling/node-placement-policies
 GET /api/v1/scheduling/overview
 GET /api/v1/scheduling/timeline
 GET /api/v1/scheduling/yield-policies
@@ -289,7 +291,6 @@ PATCH /api/v1/models/{id}/inference-config
 PATCH /api/v1/nodes/management-roles
 PATCH /api/v1/nodes/{uuid}/accelerator
 PATCH /api/v1/nodes/{uuid}/name
-PATCH /api/v1/nodes/{uuid}/placement-policy
 PATCH /api/v1/nodes/{uuid}/runtime
 PATCH /api/v1/security/settings
 PATCH /api/v1/storages/settings
@@ -335,6 +336,7 @@ POST /api/v1/evaluate
 POST /api/v1/experience/password
 POST /api/v1/experience/reset
 POST /api/v1/images/import
+POST /api/v1/images/nodes/{uuid}/preview-archive-path
 POST /api/v1/images/preview-archive-url
 POST /api/v1/images/sync
 POST /api/v1/images/{id}/nodes/{uuid}/cancel
@@ -399,11 +401,13 @@ POST /api/v1/plugins/{id}/rollback
 POST /api/v1/plugins/{id}/upgrade
 POST /api/v1/priority-classes
 POST /api/v1/providers
+POST /api/v1/providers/test
 POST /api/v1/providers/{id}/install
 POST /api/v1/providers/{id}/instances
 POST /api/v1/providers/{id}/instances/{externalID}/power
 POST /api/v1/providers/{id}/instances/{externalID}/resize
 POST /api/v1/providers/{id}/sync
+POST /api/v1/providers/{id}/test
 POST /api/v1/pull/credentials
 POST /api/v1/pull/credentials/{id}/test
 POST /api/v1/pull/proxies
@@ -453,6 +457,7 @@ PUT /api/v1/kube/clusters/{uuid}/pools
 PUT /api/v1/mcp/settings
 PUT /api/v1/networks/{id}
 PUT /api/v1/networks/{id}/attachments/{attachmentID}
+PUT /api/v1/networks/{id}/attachments/{attachmentID}/label
 PUT /api/v1/nodes/{uuid}/gpus/scheduling
 PUT /api/v1/nodes/{uuid}/labels
 PUT /api/v1/nodes/{uuid}/management-roles

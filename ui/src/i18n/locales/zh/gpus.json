@@ -119,21 +119,28 @@
   },
   "composition": {
     "title": "显存分配",
+    "titleHelp": "色块是调度为各实例预留的显存，标记线是整卡当前实际使用的显存。实例通常用不满预留，两者不必相等；能否再部署以“可分配”为准。",
     "aria": "显存分配",
     "slice": "{{name}} · 上限 {{limit}} GiB",
     "wholeCard": "{{name}} · 整卡",
-    "overhead": "上限外开销（运行时上下文等）",
-    "sleeping": "休眠实例残留",
+    "overhead": "运行时固定占用（不计入切片上限）",
+    "sleeping": "休眠实例占用",
+    "foreign": "平台外进程占用",
+    "foreignUnknown": "平台外进程占用（用量未知）",
+    "headroom": "为平台外进程预留的余量",
+    "headroomHelp": "平台外进程的显存可能继续增长，平台在它旁边留出这部分不分配。\n大小在「设置 › 节点与部署 › 部署」中调整。",
+    "helpLabel": "{{name}}的说明",
+    "withheld": "不可分配",
     "free": "可分配",
+    "idle": "空闲（不参与调度）",
     "used": "整卡实际使用 {{used}}",
-    "usedLegend": "整卡实际使用",
-    "note": "色块按调度记账绘制：dGPU 切片按显存上限计，另加上限外的运行时开销；黑线是整张卡当前的实际占用。"
+    "usedLegend": "整卡实际使用"
   },
   "state": {
     "asleep": "休眠 L{{level}}"
   },
   "tooltip": {
-    "actualVRAM": "切片的 dGPU 拦截库按上限统计的显存。厂商工具看到的进程显存会更多：NVIDIA 上约多 0.4 GiB 的 CUDA context",
+    "actualVRAM": "计入 dGPU 上限的显存；厂商工具显示的更多，NVIDIA 上约多 0.4 GiB 的 CUDA context",
     "smReference": "按采样周期取的参考值，两个切片分时共用 SM 时会在 0 和 100 之间跳变；看趋势请打开详情里的 1 分钟均值"
   },
   "quota": {

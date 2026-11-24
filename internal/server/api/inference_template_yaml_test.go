@@ -16,6 +16,7 @@ import (
 
 	"gpuworks.ai/gpuworks/internal/server/auth"
 	"gpuworks.ai/gpuworks/internal/server/bus"
+	"gpuworks.ai/gpuworks/internal/server/deploy"
 	"gpuworks.ai/gpuworks/internal/server/inferenceapi"
 	"gpuworks.ai/gpuworks/internal/server/inferencecatalog"
 	"gpuworks.ai/gpuworks/internal/server/inferencecatalog/packages"
@@ -68,7 +69,7 @@ func fullTemplateCatalog(asset []byte) inferencecatalog.FlatCatalog {
 	gpus := inferencecatalog.GPUSelector{Vendor: "nvidia", CC: ">=8.0", Name: "H100", ArchID: "sm_90"}
 	primary := inferencecatalog.Component{Name: "main", Role: "primary", Weights: weights(fullTemplateID), WeightBytes: 4_000_000_000, MountPath: "/models/main"}
 	draft := inferencecatalog.Component{Name: "draft", Role: "speculative_draft", ModelID: fullDraftID, Weights: weights(fullDraftID), WeightBytes: 1_000_000_000, MountPath: fullDraftMount}
-	prometheus := &inferenceapi.Metrics{Endpoint: "/stats", Inherit: "sglang", Map: inferenceapi.MetricMap{
+	prometheus := &inferenceapi.Metrics{Endpoint: "/stats", Port: inferenceapi.MetricsPortSeparate, Inherit: "sglang", Map: inferenceapi.MetricMap{
 		"adapter_ms_total":   {To: "prompt_tokens_total", Scale: 0.001},
 		"adapter_requests_x": {To: "requests_running"},
 	}}
@@ -91,7 +92,7 @@ func fullTemplateCatalog(asset []byte) inferencecatalog.FlatCatalog {
 		Name: "optimized-h100", DisplayNameZHCN: "H100 · BF16 · 投机解码", DisplayNameEN: "H100 · BF16 · Speculative", Scenario: "latency", Engine: "vllm",
 		Image: "gpuworks/vllm:test", ImageSources: []string{"quay.io/gpuworks/vllm:test", "registry.example/gpuworks/vllm:test"},
 		Weights: weights(fullTemplateID), WeightBytes: 140_000_000_000, RuntimeWeightBytes: 70_000_000_000,
-		GPUs: gpus, Args: []string{"--max-model-len", "32768"}, Env: map[string]string{"VLLM_TEST": "1", "DRAFT_PATH": fullDraftMount},
+		GPUs: gpus, Args: []string{"--max-model-len", "32768"}, Env: map[string]string{"VLLM_TEST": "1", "DRAFT_PATH": fullDraftMount, "METRICS_LISTEN": "127.0.0.1:${GPUWORKS_METRICS_PORT}"},
 		PreStartArgv: []string{"/opt/gpuworks/serve.py", "--prepare"},
 		Assets:       []inferencecatalog.Asset{{File: fullAssetPath, SHA256: hex.EncodeToString(digest[:]), SizeBytes: int64(len(asset)), UnpackTo: "/opt/gpuworks/serve.py"}},
 		Entrypoint:   []string{"python3", "-m", "vllm.entrypoints.openai.api_server"},
@@ -108,6 +109,7 @@ func fullTemplateCatalog(asset []byte) inferencecatalog.FlatCatalog {
 		MemlockUnlimited: true,
 		StartTimeoutSec:  5400,
 		DockerArgs:       []string{"--cap-add=SYS_PTRACE", "--security-opt=seccomp=unconfined"},
+		Dirs:             []deploy.ManagedDir{{Name: "session-state", MountPath: "/state", LimitBytes: 400 << 30, Retain: deploy.ManagedDirRetainDeployment}},
 	}
 	scripted := inferencecatalog.InferenceSpec{
 		Name: "scripted", Engine: "vllm", Image: "gpuworks/vllm:test", Weights: weights(fullTemplateID),

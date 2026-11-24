@@ -56,6 +56,7 @@ usage_report: false        # No daily report or node counts/GPU models with auto
 | `data_dir` | `./data` | Database, master.key, metrics and log stores, inference catalog packages, and more | `--data` (the database path can also use `--db`) |
 | `log.file` / `max_size` / `keep` | `<data>/logs/gpuworks-server.log`, 10MB, 20 | File and rotation settings for the service's own logs (`max_size` uses KB/MB/GB in powers of 1024); empty entries use their defaults | `--log-file`, `--log-max-size`, `--log-keep` |
 | `log.level` | info | Log level: `debug` / `info` / `warn` / `error`; other values use info | `--log-level` |
+| `log.stall_report_after` | 3s | When a log write or a store operation waits longer than this, every goroutine's stack is recorded as a stall report (`<data>/diagnostics/stalls/`); `0` turns the reports off. See [Troubleshooting](../how-to/troubleshooting.md#server-卡住或偶发变慢时卡顿报告与现场堆栈) | `--stall-report-after` |
 | `trusted_proxies` | Empty (install writes `127.0.0.1/32, ::1/128`) | Proxies allowed to supply `X-Forwarded-For` / `-Host` / `-Proto` / `-Port`; while exposure (`gpuworks expose`) is enabled, connections from the local host are also trusted and need not be listed ([ADR 0049](../adr/0049-expose-trusts-same-host-connector.md)) | `--trusted-proxies` |
 | `tls_cert_file` / `tls_key_file` | Empty | Paths to the PEM certificate chain and private key for native HTTPS; both must be set. Non-maintenance listeners use TLS 1.2 or later and require explicit listen IPs; wildcard addresses are unsupported. The local `127.0.0.1` / `::1` maintenance endpoints retain HTTP. See [Production Deployment](../how-to/deploy-production.md#原生-https) | — |
 | `outbound_restrict_private_hosts` | `false` | Strict mode for the management node's outbound HTTP access to private destinations. Disabled by default: ordinary private and local loopback destinations need no allowlist. When `true`, private targets require `outbound_allow_private_hosts` authorization. Changes apply to the next request after saving; special metadata, link-local, and reserved addresses remain denied | — |
@@ -331,8 +332,12 @@ The request body is merged into the current value, changing only the keys it con
 | `start_timeout_sec` | 1800 | 60–86400 | The first step of the startup wait limit (source `cluster`): a template spec's `start_timeout_sec` replaces it, a known engine deadline can extend it up to 86400 seconds, and a deployment's own value replaces all of them; see [Startup Wait Limit](deployment-launch-sources.md#启动等待上限). A timeout marks this startup attempt as failed and recreates the instance according to retry rules. Edit it in the "Deployment" card in Settings; an individual deployment can override it with `start_timeout_sec` ("Start timeout" under "Runtime environment" in the deployment form) |
 | `event_retention_days` | 180 | 1–3650 | Number of days to retain the event timeline |
 | `event_retention_bytes` | 50 GiB | 64 MiB–1 TiB | Event timeline retention in bytes; whichever limit is reached first, bytes or days, applies |
+| `foreign_headroom_pct` | 5 | 0–50 | On a card shared with processes outside the platform, the memory left unallocated beside what they hold, as a percentage of the card's memory |
+| `foreign_headroom_min_bytes` | 4 GiB | 0–64 GiB | The minimum for that headroom; the headroom is the larger of the share and the minimum |
 
 At startup and every 6 hours after, the server trims events to these two limits, oldest first, in small batches, giving up the database write between batches so other writes are not held up for long; it deletes only as many as the limits require. When the server stops, a trim stops between batches and the next one picks up the rest. The byte count is estimated from the characters of an event's text (message, parameters, event code): a multi-byte character such as Chinese counts as one, so actual usage can exceed the set value.
+
+The memory of processes outside the platform is a reading taken once a minute, not a limit they keep to; when they grow, the headroom keeps them and the instances on the same card from running out of memory. Setting both keys to 0 keeps no headroom; use it only when those processes hold a fixed amount (for example an inference engine that takes its memory once at startup). A change applies at once to later placements, to quota changes in place and to the allocatable memory in the GPU list; running instances are not affected. In the console it is under Settings › Nodes & deployments › Deployment.
 
 If values saved by older versions lack new keys, those keys use factory defaults when read. If the stored value cannot be parsed or is out of range, the entire value falls back to factory defaults.
 
@@ -346,6 +351,7 @@ Environment variables serve only the agent and installation scripts; the server 
 |---|---|---|---|
 | `GPUWORKS_ADMIN_PASSWORD` | None | Initial password when the admin account is first created; `gpuworks install` also uses it in the order `--password` > this variable > interactive input > random. Read only when creating the account | `gpuworks serve`, `gpuworks install` |
 | `GPUWORKS_ADDR`, `GPUWORKS_DATA_DIR`, `GPUWORKS_TRUSTED_PROXIES` | None | Retained only for old units predating `server.yaml`: take effect only when neither the command line nor `server.yaml` provides the corresponding value; no longer used after `install` takes over | `gpuworks serve` |
+| `GPUWORKS_DQLITE_BIN` | `gpuworks-dqlite` beside the server executable | Read only in a Linux build with the `dqlite` tag: path of the database helper. A cluster installation puts the helper beside the server, so it does not need to be set. The cluster's storage tier is neither an environment variable nor a `server.yaml` key: it is settled at installation and recorded in the member's `cluster-enrollment/config.json`; see [Storage tiers](../explanation/control-plane-cluster.md#storage-tiers) | [Control-plane cluster behaviour and limits](../explanation/control-plane-cluster.md) |
 
 ### Agent Environment Variables
 
@@ -386,6 +392,7 @@ and udocker-bundle are only needed to temporarily override values in the file.
 | `DOCKER_HOST`, `DOCKER_CONTEXT` | The docker driver only accepts a local Unix socket: if `DOCKER_HOST` does not use `unix://` or `DOCKER_CONTEXT` is not `default`, the docker driver is considered unavailable because bind mounts and accelerator devices would be resolved on a remote machine | Automatic runtime detection |
 | `ASCEND_HOME_PATH` | Its `version.info` is checked first when detecting the Ascend CANN version | Agent GPU detection |
 | `HF_TOKEN` | Access gated HuggingFace repositories | `gpuworks-catalog-model-config` |
+| `GOMAXPROCS` | How many threads the Go runtime runs Go code on at once. When it is not set, the server limits its default to 32: on a host with many logical CPUs over several NUMA nodes, using all of them costs 2.5 to 3.5 times the CPU per request under heavy gateway load at the same throughput, while the server needs about 15 cores at the scale target with gateway traffic, fleet redeploys and a server-origin evaluation at once. A host with 32 CPUs or fewer, or a container CPU limit below that, is not affected. Setting the variable runs the server with that value; the startup log states the value before and after the limit | `gpuworks serve` |
 | `INVOCATION_ID` | Set by systemd for unit processes; the server uses it to determine whether it is supervised by `Restart=always` and allow "Restart now" in the console | `gpuworks serve` |
 | `LC_ALL`, `LC_CTYPE`, `LANG` | Determine whether the locale uses UTF-8, which decides whether `install` prints a block-style or plain ASCII banner | `gpuworks install` |
 | `GPUWORKS_API_KEY`, `GPUWORKS_URL`, `GPUWORKS_WS_URL` | Only appear in curl/Python examples generated by the UI; you set them in your own shell, and the program itself does not read them | Inference example snippets |
@@ -412,6 +419,24 @@ The following names appear in the code but are not user-configurable settings. D
 - `GPUWORKS_PARTITION_PROBE_BACKEND`, `GPUWORKS_PARTITION_PROBE_QUOTA_MIB`: Inputs injected into the probe program when the agent starts a dGPU probe container; they are not configuration settings read by the agent.
 - `__GPUWORKS_AGENT_PROCESS_OK__`, `__GPUWORKS_AGENT_PROCESS_WARN__`: Marker strings in the output of verification commands after SSH installation on a cloud provider; they are not environment variables.
 
-<!-- translation-source-sha256: 55f5debd6af309799b6e058acf801c7a40ea39da57482977334188d382406f7e -->
+<!-- translation-source-sha256: ab89d916f53e3adc2e328c60371f3d5c40187b54bc830f11e32f97e91a18943f # Configuration Reference -->
+<!-- translation-source-sha256: fe7442c29a8be0a2665274ea1a557e80579244ffcd3fbadea0a4a47c5bc37cdb ## Server Configuration File server.yaml -->
+<!-- translation-source-sha256: d7dd67b789f8b241cbd8b3967bf492083928fcc82017f21736fd516cd2d4a32f ### Management Sessions -->
+<!-- translation-source-sha256: b4b7537ec834f28badc079be352e1fbbd35c58bfe41c8f0d8b432a738119d30e ### Peer Relay Resource Limits -->
+<!-- translation-source-sha256: 0f9cebe5ca9c73fa634534ea356eeaa3ac27791558b3b42a9065ce31a744e7bc ### Listen Rules -->
+<!-- translation-source-sha256: cfd33528d96b4be5a0ad0895c30ab1f980c106fd779c64a46a84f6ef1a8aa68c ### Change Listen Addresses in the Console -->
+<!-- translation-source-sha256: 38f2a3eb63ce4f3d0029359496132cf591f711703a30563e7c76a9921613b690 ### Command-Line-Only Tuning Arguments -->
+<!-- translation-source-sha256: f8e933bddbacb1864e73c7bd90ecc1da1229c953a296baddf8d4863003201dcf ### Initial Administrator and Keys -->
+<!-- translation-source-sha256: 8395807f1cadf9e74b9ed36e0dd6a06dadf66f3436029ccb338b7615a9c4d127 ### Plugin Trust and Site Policy -->
+<!-- translation-source-sha256: b42ea9a8f10360bca1babf453ffc4c366a45fb89d67e8b04f3870749a6e3b0c1 ## Pull Proxies and Outbound Access -->
+<!-- translation-source-sha256: 1290325d6e81db318ea2c530721200a00935ff53cb7e96f7389d775c5b4d5f8c ### Outbound HTTP Proxy Policy -->
+<!-- translation-source-sha256: 211f27db95ac706484c7a7e5c28ddbbd60014773881d2ff1d10ff0e1b7457389 ## Image Catalog and Image Pulls -->
+<!-- translation-source-sha256: 4700eefb151c9a99fec158543dee215422bdfcc3888626c4bf4ddf25b9b1fbdc ## Deployment Policy -->
+<!-- translation-source-sha256: 3892ea863909dec5e9899a22cdc752e695f91d7dcc2d0ac4e7ea2d238ba47651 ## Environment Variables -->
+<!-- translation-source-sha256: 6bdcaaa9ff0370ab6a8f8108875833921c297dba119f650e005b7752c744c9f0 ### Variables Read by the Server -->
+<!-- translation-source-sha256: 4f2f126bbf1cb3b480ad22f8383f9c389cb71bd49839b4d77d338b2ae1208a76 ### Agent Environment Variables -->
+<!-- translation-source-sha256: e83b889545bc781db014647c1a2ef31619ef878e35a88640148bcdad938b8807 ### Other General-Purpose Variables Read -->
+<!-- translation-source-sha256: eb148b0c641c2132abcda95d460feb5369ebeaf448231429ca82ef7abf4cfef1 ### Variables for Testing and Development Only -->
+<!-- translation-source-sha256: 2ffcca8478f313bc1166e7cc2552185fd88d3151cdff23b5c107d5e570d4a9df ### Internal Implementation Details -->
 <!-- translation-localized-code-block: 86f9f71f25c2b857ad0011486eb8c57eb9996ec1a4417ab035e24d7b4b1f898d dc1d5c5bc85efcc1eb7d1d72bc584329c53e7d9c636c376ad8a7ce5dc1d901cb Reviewed configuration comments; usage_report=false suppresses the daily report and node/GPU counts, while automatic checks retain installation ID and versions. Keys and values unchanged. -->
 <!-- translation-localized-code-block: 2a636013886e3274f9549d011376c48f05c387773ed46b7bf2ba8e5018147ee9 dcf0c95e55438a724e2ae70bef18a40f8ba32a257bab9f5a81a715cb374fc0e3 Reviewed the comments of the plugins example, including max_down_grace; keys and values unchanged. -->

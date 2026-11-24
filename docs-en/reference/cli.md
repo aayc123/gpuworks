@@ -76,6 +76,7 @@ Run the control plane. Without `--config`, all functionality is served on `--add
 | `--log-max-size SIZE` | `10MB` | Log rotation threshold (KB/MB/GB, base 1024) |
 | `--log-keep N` | `20` | Number of rotated log files to retain |
 | `--log-level LEVEL` | `info` | `debug` / `info` / `warn` / `error`; other values are treated as `info` |
+| `--stall-report-after DURATION` | `3s` | Record a stall report when a log write or a store operation waits longer than this; `0` turns the reports off |
 | `--proxy-max-body-bytes BYTES` | `268435456` (256 MiB) | `/v1` request body limit; exceeding it returns 413 |
 | `--recovery-enabled BOOL` | `true` | Enable out-of-band SSH recovery for offline agents |
 | `--recovery-grace-period DURATION` | `2m` | Wait time after disconnection before starting SSH recovery |
@@ -94,6 +95,7 @@ Key behavior:
 - Logs are written to both stderr and a file, with size-based rotation. Logging is configured only through flags and `server.yaml`, with no environment variables.
 - The server reads the operator-facing `GPUWORKS_ADMIN_PASSWORD` variable (the initial password when admin is first created) and the `GPUWORKS_USAGE_REPORT=off` override (which disables usage reporting). There is also an internal marker, `GPUWORKS_SUPERVISED=1`, set by the supervisor for its child process (the server removes it from its own environment after reading it and does not pass it to processes it starts). `GPUWORKS_ADDR`, `GPUWORKS_DATA_DIR`, and `GPUWORKS_TRUSTED_PROXIES` are used only as compatibility bridges for legacy units; see the Configuration Reference for details.
 - On `SIGUSR1`, a loopback-only pprof listener is temporarily opened (first trying `127.0.0.1:6060`, then a random port if it is occupied) and automatically closed after 10 minutes. The actual address is recorded in the log.
+- When a log write, a database statement or the begin or commit of a transaction, or a write to the metrics, log or request record store waits longer than `--stall-report-after`, the server takes every goroutine's stack in memory and, once the disk can be written, stores it as `<data>/diagnostics/stalls/stall-<UTC time>.txt` (the newest 20 are kept, at least 1 minute apart), then writes one `process stall recorded` line with the duration and the report path when the stall ends. A process that was not scheduled at all for that long is recorded as `process pause recorded`. See [Troubleshooting](../how-to/troubleshooting.md#server-卡住或偶发变慢时卡顿报告与现场堆栈).
 - `SIGINT`/`SIGTERM` trigger graceful shutdown. When the process runs under systemd (`INVOCATION_ID` is present) or is started with `--supervise`, the console's "Restart now" action and console upgrades can make it exit and be restarted by `Restart=always` or the supervisor.
 
 ### Process Behavior of `--supervise`
@@ -370,10 +372,11 @@ Each configuration item is resolved in this order: **command-line flag > environ
 | None | `$GPUWORKS_RUNTIME_MOUNT_ROOT`, `$GPUWORKS_UDOCKER_BUNDLE` | Can only come from environment variables or the configuration file's `MOUNT_ROOT` and `UDOCKER_BUNDLE`; the agent sets them for the runtime at startup |
 | `--data-lane BOOL` | None | Defaults to `true`. Enable a dedicated high-throughput data channel; set to `false` behind a proxy that only supports a single connection |
 | `--image-pull-max-connections N` | `$GPUWORKS_IMAGE_PULL_MAX_CONNECTIONS` | Upper limit of simultaneous connections a runveil (udocker) node opens to each registry host (to the proxy when going through one) when pulling images; `0` or unset means automatic (up to 16), `1` means a single connection, and the largest value is 32; a value out of range makes the agent refuse to start. For registries and proxies that allow only a few connections or rate-limit many; not an everyday setting. See [Limit Connections for Image Pulls](../how-to/configure-pull-settings.md#限制镜像拉取的连接数runveil-节点) |
+| `--stall-report-after DURATION` | None | Defaults to `3s`. When a log write waits longer than this, every goroutine's stack is recorded as a stall report (`<state>/stalls/`); `0` turns the reports off |
 | `--dcgm MODE` | `$GPUWORKS_DCGM`; defaults to `off` | Optional DCGM SM utilization probe: `off` / `auto` (enabled only when `dcgmi` is on PATH) |
 
 - Default for `--state`: `$GPUWORKS_STATE_DIR`, otherwise `/opt/gpuworks` (if it exists); on macOS, then `~/gpuworks` (if it contains `gpuworks-agent.conf`) and `~/.gpuworks` (if it exists); otherwise `gpuworks` under the user's configuration directory, and finally `./gpuworks-state`.
-- `--data-lane`, `--dcgm` and `--image-pull-max-connections` are not part of the configuration file and are not recorded by `configure`.
+- `--data-lane`, `--stall-report-after`, `--dcgm` and `--image-pull-max-connections` are not part of the configuration file and are not recorded by `configure`.
 - `--driver udocker` selects runveil: `udocker` is the retained driver name (still used in node records and APIs). Its implementation uses native image handling and a launcher that directly invokes the embedded PRoot; the UI displays runveil.
 - `--driver host` runs the engine as a host process for macOS (Apple silicon) nodes: Linux containers on macOS run in a virtual machine and cannot access the Metal GPU. The image is a darwin/arm64 environment bundle, which the agent starts directly after extraction.
 - If no driver is specified, macOS selects host directly (even if Docker Desktop is available). Other systems detect runtimes in this order: docker (daemon available) > nerdctl > runveil. If none is available, deployments are disabled on the node. An unknown `--driver` value or a runtime unavailable on the current system (`host` on Linux or `udocker` on macOS) logs an error and leaves all runtimes disabled.
@@ -406,7 +409,7 @@ Manually upgrade the agent: download the new version from the server, replace th
 - Only Linux is supported. Download from `<server>/dl/gpuworks-agent-linux-<arch>` to `<bin>.new`. Only after `smoke` succeeds within 10 seconds is the old binary renamed to `<bin>.old` and replaced with the new version. A smoke failure leaves the old binary unchanged.
 - If an agent is already running with that state directory (resident under systemd or nohup), `upgrade` is rejected before downloading anything: the `run` it would become is outside the original service, and would share the node's identity with the resident agent, each replacing the other's connection. Upgrade a resident agent with "Upgrade Agent" on the Nodes page.
 - A `server_dial` agent does not know the server address and cannot download from it: manual `upgrade` is rejected immediately, with a message that upgrades are pushed by the server through the "Upgrade Agent" action on the Nodes page.
-- When configuration comes from a file, the replacement `run` carries `--state <dir>` and any explicitly supplied `--server`, `--token`, `--driver`, `--connect-mode` and `--listen`. Environment variables are inherited, file/environment tokens are not promoted into arguments, and the configuration file is not rewritten. Older agents without a configuration file carry `--server --token --connect-mode --state`, plus `--listen` for `server_dial` and `--driver` if a driver is specified. Neither case carries `--data-lane`, `--dcgm` or `--image-pull-max-connections`. The replacement process inherits the current environment variables, so you can use `GPUWORKS_DCGM` to retain the value of `--dcgm` and `GPUWORKS_IMAGE_PULL_MAX_CONNECTIONS` to retain the value of `--image-pull-max-connections`. There is no corresponding environment variable for `--data-lane`, which returns to its default of `true` after a manual upgrade.
+- When configuration comes from a file, the replacement `run` carries `--state <dir>` and any explicitly supplied `--server`, `--token`, `--driver`, `--connect-mode` and `--listen`. Environment variables are inherited, file/environment tokens are not promoted into arguments, and the configuration file is not rewritten. Older agents without a configuration file carry `--server --token --connect-mode --state`, plus `--listen` for `server_dial` and `--driver` if a driver is specified. Neither case carries `--data-lane`, `--stall-report-after`, `--dcgm` or `--image-pull-max-connections`. The replacement process inherits the current environment variables, so you can use `GPUWORKS_DCGM` to retain the value of `--dcgm` and `GPUWORKS_IMAGE_PULL_MAX_CONNECTIONS` to retain the value of `--image-pull-max-connections`. There is no corresponding environment variable for `--data-lane` or `--stall-report-after`, which return to their defaults (`true`, `3s`) after a manual upgrade.
 - The entire process has a 10-minute budget; only one upgrade is allowed at a time. The replacement process must also register successfully within the confirmation deadline or it rolls back to `<bin>.old`. For agents that support pushed upgrades, the "Upgrade Agent" action on the Nodes page has the server push the binary over the connection, without using `/dl/` or `smoke`. See [Upgrades and Version Compatibility](../how-to/upgrade-and-compatibility.md).
 
 ## gpuworks-agent doctor
@@ -656,5 +659,37 @@ Maintain each model's `model_config` in the inference catalog package (the subse
 
 - Gated repositories require `export HF_TOKEN=…`. If it is not set, the tool displays a message and treats these repositories as returning 401. The product itself fetches metadata without a token, so predefined models must include their own facts required for estimation.
 
-<!-- translation-source-sha256: 6d49c1dd283a81a0cc080a5df48a77a37c92231dc9c8af96df67ffe95396e3ba -->
+<!-- translation-source-sha256: 201e0a433d652e54297fff0d12494ee8e9e067fc4a58c576efa1babb109cc7a2 # CLI Reference -->
+<!-- translation-source-sha256: e48f15361d91f7b2f52f08c0c47cc942c26fcef3931465b0068745f4003f3da5 ## Example: Restart the Control Plane -->
+<!-- translation-source-sha256: bb615178833ddff62a14109e42bdbb10743f24b153ebff4bfb5e4e7c6672c03f ## Command Overview -->
+<!-- translation-source-sha256: 6efa0dc39ed623596311374b02d588ba30012b6035e4c6a84eaf19beed2bf6e5 ## gpuworks serve -->
+<!-- translation-source-sha256: 9354558496572bea467e9a0059214f586dfbea9ed5f2044628f2c64796e28c63 ### Process Behavior of `--supervise` -->
+<!-- translation-source-sha256: cb414f74ad1e64b356b7ec05057876c418cbe8db889307de5f6453704978900d ## gpuworks install -->
+<!-- translation-source-sha256: 12b839fb856984f3e9ab8c1e066c1d48b76baba2830a862433cbc8af133dfeba ## gpuworks upgrade -->
+<!-- translation-source-sha256: 018e02ade9c08795d554576964bc23aa4a51feb638e769236c5e241959890400 ## gpuworks restart -->
+<!-- translation-source-sha256: 5e595fcf4372da9d541a3f97edd04d56d42012ce61277fad83bdcc283bcc7a30 ## gpuworks uninstall -->
+<!-- translation-source-sha256: 79661a67f302a7a9b9e9329d2a0612cda8bd0b8f999fe7181b7c232ade5603a6 ## gpuworks stop -->
+<!-- translation-source-sha256: cbb992b64ad03aede3a5133878992ab0c28eecb41f8427845209e69388bfc07e ## gpuworks expose -->
+<!-- translation-source-sha256: 7994938388193822ab3851778c2c208eef22c2529020f31d3d5ae6bb3a550b59 ## gpuworks migrate -->
+<!-- translation-source-sha256: 01a05a53a113b047e5fc58e261e66d64ec1fb44fd74f7f3683fdf00f31c18693 ## gpuworks reset-password -->
+<!-- translation-source-sha256: 3971e0f58259c786cafecb857f1d3b3756b975ea7be8103bc4b90ef33446cb53 ## gpuworks plugin -->
+<!-- translation-source-sha256: 762521050469bb46a7abbd2d1e614997566572221a86387838656f54066db0df ### Maintenance journal -->
+<!-- translation-source-sha256: 9a164d00b28c9de9331829caf45f211142a51aaf4f906caca6c0798dc0328add ## gpuworks host-identity -->
+<!-- translation-source-sha256: 43e7c1a5156597455d770d3f91dd86a32ace7efd39a988e72e6fbc287500a890 ## gpuworks support-bundle -->
+<!-- translation-source-sha256: 3dd2ae37a11fd7403c31c028058240a2a7b77aec6a47c5a8cf575ba53f2d0a27 ## gpuworks-agent configure -->
+<!-- translation-source-sha256: e55796b9f748b9bacd313ac75cfeeb2cd9214cc253d2725c6d4fd317c3a46d48 ## gpuworks-agent run -->
+<!-- translation-source-sha256: 1bd943974d27c67cd4e548d103ddbac5430ee786325d1a8e0027dfe15bcb3ae9 ## gpuworks-agent smoke -->
+<!-- translation-source-sha256: 5731cc34927db6de988ad28f03ac7dbd4db006e51ac679d9b86172a80f079840 ## gpuworks-agent upgrade -->
+<!-- translation-source-sha256: aca0959be080b318b5542440d6379ee7084de5f9d4773c1ff29aa09af5cca0cf ## gpuworks-agent doctor -->
+<!-- translation-source-sha256: 6b9fac49d2172a7533468857d9496a0770a2a427bbbb4230a933f67a1dde4e37 ## gpuworks-agent grant-device-access -->
+<!-- translation-source-sha256: 55f8fa023f84f6c2b6c9fd99ff829a502261751011de7f439e4f84a29e093c06 ## gpuworks-agent bench -->
+<!-- translation-source-sha256: 4335e011b68e1ea97118f294ad73e72ed4accd74971a380c450f964f385066b4 ## gpuworks-agent runveil -->
+<!-- translation-source-sha256: 0c79f8b4998ff2bb1ced5f353f8a7c76d56a7bbc77a8d693c96e77bc57e33df5 ## gpuworks-agent install-service -->
+<!-- translation-source-sha256: aa89e7ece65dcf45b5f9ce4f83bb37d845cef29a98bd1654d77df1cb861fc91f ## gpuworks-agent uninstall -->
+<!-- translation-source-sha256: 1e41be4970bd2d73ce3f79aab2fd5cfe961379c19d28f17b30f480c49798ee94 ## Node Installation Script install.sh -->
+<!-- translation-source-sha256: a9d985c3ad4b30c8ba55f100bd0c05aed9ffe6938bcf955647daec83001aabf6 ## Other CLIs -->
+<!-- translation-source-sha256: 1aef641cd1b21706e2407379a8c7a698a092304e66f3b046047608156466ce3c ### gpuworks-dist -->
+<!-- translation-source-sha256: d7ac91dc2d516e46436bfc8c681d71ffda1fc25f77efaf669b999ef6604e6643 ### gpuworks-image-manifest -->
+<!-- translation-source-sha256: 08e8efd3ebc6584b3186f57ac2f417e31199000da630e50f46ae83751d306a8f ### template-probe -->
+<!-- translation-source-sha256: 5097e5778748599ee45f714e05adb57fd7c82829cc8b950352f5c2e642a8065e ### gpuworks-catalog-model-config -->
 <!-- translation-localized-code-block: 97428c61d0b0a154e15b86cb32f62698fe47be9a13f5d8d97870a67b551d77de ad2a948283214a4b9cf06c0fbf9e90995a5b4e623c49d1e33386cb49050b110a Translate uninstall command comments. -->

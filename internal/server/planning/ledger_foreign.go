@@ -7,8 +7,6 @@ package planning
 import (
 	"gpuworks.ai/gpuworks/internal/proto"
 	"gpuworks.ai/gpuworks/internal/server/estimate"
-	"gpuworks.ai/gpuworks/internal/server/nodepolicy"
-	"gpuworks.ai/gpuworks/internal/server/partitioncap"
 	"gpuworks.ai/gpuworks/internal/server/store"
 )
 
@@ -33,45 +31,29 @@ func foreignShare(node *store.Node, g *store.GPU) (int64, bool) {
 	return bytes, shareable && node.PartitionSafetyProtocol >= proto.PartitionSafetyForeignTracked
 }
 
-// PartitionMayShareHeldCard is whether the scheduler may place a partition
-// on a card held outside the platform on its own: foreignShare's verdict, a
-// partition backend ready on the card, as NodeSnapshot hands them to
-// admission, and a node whose placement policy allows it without an
-// operator choosing the card. Statistics that count such a card as
-// schedulable capacity ask it, so they do not count capacity the scheduler
-// never uses.
-func PartitionMayShareHeldCard(node *store.Node, g *store.GPU) bool {
-	if !node.PlacementPolicy.SharesForeign(nodepolicy.Consent{}) {
-		return false
-	}
-	if _, shareable := foreignShare(node, g); !shareable {
-		return false
-	}
-	for _, capability := range partitioncap.ForGPU(node, g) {
-		if capability.Status == partitioncap.StatusReady {
-			return true
-		}
-	}
-	return false
-}
-
 // ForeignHold is the memory on one of the node's cards that processes
-// outside the platform hold, with the headroom kept beside it: what neither
-// admission (scheduler.GPU.Available), a quota change in place (QuotaRoom)
-// nor the GPU list's free figure may offer to the platform. Zero when no
-// holder's memory is counted. known is false on a held card that takes no
-// work and whose holders' memory is not known (store.GPU.ForeignBytes): the
-// card offers nothing beyond what is placed on it already, as admission
-// refuses it outright, rather than reading the unknown as nothing held.
-func ForeignHold(node *store.Node, g *store.GPU) (bytes int64, known bool) {
+// outside the platform hold (held) and the headroom the deployment policy
+// keeps beside it: together, what neither admission
+// (scheduler.GPU.Available), a quota change in place (QuotaRoom) nor the GPU
+// list's free figure may offer to the platform. Both zero when no holder's
+// memory is counted. known is false on a held card that takes no work and
+// whose holders' memory is not known (store.GPU.ForeignBytes): the card
+// offers nothing beyond what is placed on it already, as admission refuses
+// it outright, rather than reading the unknown as nothing held.
+func ForeignHold(node *store.Node, g *store.GPU, policy store.DeploymentPolicy) (held, headroom int64, known bool) {
 	if g.HeldOutsidePlatform() && !g.CanTakeWork() {
 		if _, ok := g.ForeignBytes(); !ok {
-			return 0, false
+			return 0, 0, false
 		}
 	}
-	held, _ := foreignShare(node, g)
+	held, _ = foreignShare(node, g)
 	if held <= 0 {
-		return 0, true
+		return 0, 0, true
 	}
-	return held + estimate.ForeignHeadroomBytes(g.MemoryTotal), true
+	return held, foreignHeadroom(policy, g.MemoryTotal), true
+}
+
+// foreignHeadroom is the policy's headroom on a card of that size.
+func foreignHeadroom(policy store.DeploymentPolicy, totalBytes int64) int64 {
+	return estimate.ForeignHeadroomBytes(totalBytes, policy.ForeignHeadroomPct, policy.ForeignHeadroomMinBytes)
 }

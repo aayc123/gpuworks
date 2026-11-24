@@ -106,6 +106,10 @@ test("shows each item against the channel without naming the sources", async () 
   try {
     const { container } = renderCard();
     await waitFor(() => assert.ok(screen.getByText("f90e474e")));
+    const updateGroup = within(screen.getByRole("region", { name: u.updateGroup }));
+    assert.equal(updateGroup.queryByRole("switch", { name: u.autoCheck }), null);
+    assert.ok(within(container.querySelector<HTMLElement>(".gw-card-head")!).getByRole("switch", { name: u.autoCheck }));
+    assert.ok(updateGroup.getByRole("button", { name: u.check }));
     assert.deepEqual(s.refreshes, [false], "opening the page reuses the server's last check");
     assert.ok(!/oss-cn-shanghai|dl\.gpuworks\.ai|context deadline/.test(container.textContent ?? ""), "the page does not list distribution sources");
     assert.ok(within(row(u.server)).getByText(u.available));
@@ -394,12 +398,12 @@ test("the console upgrades the server after confirming and waits for the new ver
     const notice = (await screen.findByRole("link", { name: u.viewNodes })).closest("tr")!;
     assert.equal(notice.previousElementSibling, row(u.server));
     assert.equal(notice.nextElementSibling, row(u.images));
-    assert.match(notice.textContent ?? "", /Different builds \(2\)/);
-    assert.match(notice.textContent ?? "", /Pending alignment \(1\)/);
-    assert.doesNotMatch(notice.textContent ?? "", /downgrade/i);
-    assert.match(notice.textContent ?? "", /Currently unavailable for upgrade \(1\)/);
-    assert.doesNotMatch(notice.textContent ?? "", /offline/i);
-    assert.deepEqual(within(notice).getAllByRole("link").map(link => link.getAttribute("href")), ["/nodes"]);
+    // The notice says what is left to do in the operator's terms, not the
+    // server's build classes, and leads to the nodes it is about.
+    assert.match(notice.textContent ?? "", /Server upgraded to f90e474e; 3 nodes need their Agent upgraded/);
+    assert.match(notice.textContent ?? "", /3 can upgrade · 1 cannot upgrade for now/);
+    assert.doesNotMatch(notice.textContent ?? "", /downgrade|different build|alignment|offline/i);
+    assert.deepEqual(within(notice).getAllByRole("link").map(link => link.getAttribute("href")), ["/nodes?agent_upgrade=align"]);
     within(notice).getByRole("button", { name: "Close" }).focus();
     await userEvent.keyboard("{Enter}");
     await waitFor(() => assert.ok(!screen.queryByRole("link", { name: u.viewNodes }), "the upgrade notice is hidden"));
@@ -475,8 +479,20 @@ test("an uploaded release goes to the server upload endpoint", async () => {
     await userEvent.upload(inputs[0], new File([new Uint8Array([0x1f, 0x8b])], "gpuworks-f90e474e-linux-amd64.tar.gz", { type: "application/gzip" }));
     await waitFor(() => assert.deepEqual(s.calls, ["uploadServer:gpuworks-f90e474e-linux-amd64.tar.gz"]));
     const notice = (await screen.findByRole("link", { name: u.viewNodes })).closest("tr")!;
-    assert.match(notice.textContent ?? "", /Currently unavailable for upgrade \(2\)/);
-    assert.deepEqual(within(notice).getAllByRole("link").map(link => link.getAttribute("href")), ["/nodes"]);
+    assert.match(notice.textContent ?? "", /Server upgraded to f90e474e; 2 nodes cannot upgrade their Agent for now/);
+    assert.deepEqual(within(notice).getAllByRole("link").map(link => link.getAttribute("href")), ["/nodes?agent_upgrade=check"]);
+  } finally {
+    s.restore();
+  }
+});
+
+test("a cluster member shows why it cannot upgrade and offers no single-server command", async () => {
+  const s = stub([statusFixture({ server: { ...selfUpgradable, self_upgrade: false, self_upgrade_blocker: "cluster_member" } })]);
+  try {
+    renderCard();
+    await waitFor(() => assert.ok(within(row(u.server)).getByText(u.blocker.cluster_member)));
+    assert.equal(within(row(u.server)).queryByText("sudo gpuworks upgrade"), null);
+    assert.equal(within(row(u.server)).queryByRole("button", { name: u.upgrade }), null);
   } finally {
     s.restore();
   }
@@ -526,13 +542,13 @@ test("switching the channel shows it at once, checks it, and says when it is emp
   let answer: (status: UpdateStatus) => void = () => {};
   try {
     renderCard();
-    await waitFor(() => assert.ok(screen.getByText(u.channelNightlyHelp)));
+    await waitFor(() => assert.ok(screen.getByText(u.channelNightlyNote)));
     // The check of the new channel is held until the test answers it.
     apiModule.api.updates = (refresh = false) => { s.refreshes.push(refresh); return new Promise((resolve) => { answer = resolve; }); };
     await userEvent.click(screen.getByRole("combobox"));
     await userEvent.click(await screen.findByRole("option", { name: u.channelRelease }));
     // Before any answer: the new channel, its help and "checking" are shown.
-    await waitFor(() => assert.ok(screen.getByText(u.channelReleaseHelp)));
+    await waitFor(() => assert.ok(screen.getByText(u.channelReleaseNote)));
     assert.ok(screen.getByText(u.checking));
     assert.deepEqual(s.calls, ["channel:release"]);
     await waitFor(() => assert.deepEqual(s.refreshes, [false, true]));
@@ -554,7 +570,7 @@ test("a saved channel never shows the previous channel's offers if its check fai
     await userEvent.click(screen.getByRole("combobox"));
     await userEvent.click(await screen.findByRole("option", {name:u.channelRelease}));
     await screen.findByText("check failed");
-    assert.ok(screen.getByText(u.channelReleaseHelp));
+    assert.ok(screen.getByText(u.channelReleaseNote));
     assert.equal(within(row(u.server)).queryByText("f90e474e"), null);
   } finally { s.restore(); }
 });
@@ -564,10 +580,10 @@ test("a channel that cannot be saved goes back to the one in use", async () => {
   apiModule.api.setUpdateChannel = async () => { throw new Error("server.yaml is read-only"); };
   try {
     renderCard();
-    await waitFor(() => assert.ok(screen.getByText(u.channelNightlyHelp)));
+    await waitFor(() => assert.ok(screen.getByText(u.channelNightlyNote)));
     await userEvent.click(screen.getByRole("combobox"));
     await userEvent.click(await screen.findByRole("option", { name: u.channelRelease }));
-    await waitFor(() => assert.ok(screen.getByText(u.channelNightlyHelp)));
+    await waitFor(() => assert.ok(screen.getByText(u.channelNightlyNote)));
     assert.equal(screen.queryByText(u.checking), null);
     assert.deepEqual(s.refreshes, [false], "nothing is checked for a channel that was not saved");
   } finally {

@@ -78,6 +78,7 @@ type Hub struct {
 	imageSyncOwners  map[string]context.CancelFunc
 	sessions         map[string]*Session             // keyed by node UUID
 	duplicates       duplicateAgents                 // agent processes trading a node (duplicate_agents.go)
+	replaced         map[string]string               // node UUID to the session identity last replaced (relay_replaced.go)
 	imageWatches     map[[2]uint]map[string]struct{} // active image/node watchers, owned by transfer id
 	rejectMu         sync.Mutex
 	rejects          []RejectEvent
@@ -247,6 +248,20 @@ func (h *Hub) SessionCount() int {
 	return len(h.sessions)
 }
 
+// DropSessions closes every live agent session. Their agents dial again; a
+// control-plane member that stopped leading uses it so they reach the leader.
+func (h *Hub) DropSessions() {
+	h.mu.RLock()
+	sessions := make([]*Session, 0, len(h.sessions))
+	for _, session := range h.sessions {
+		sessions = append(sessions, session)
+	}
+	h.mu.RUnlock()
+	for _, session := range sessions {
+		session.Close()
+	}
+}
+
 // DialAgentWithSecret connects to an agent running in server_dial listen mode,
 // proving knowledge of the install token that the agent was started with.
 func (h *Hub) DialAgentWithSecret(ctx context.Context, addr, secret string) error {
@@ -356,7 +371,9 @@ func (h *Hub) RunServerDialReconnect(ctx context.Context, interval time.Duration
 }
 
 func (h *Hub) reconnectServerDial(ctx context.Context) {
-	nodes, err := h.store.ServerDialNodes()
+	// The owner's context bounds discovery: a member that lost database
+	// quorum must still stop this loop when its business generation ends.
+	nodes, err := h.store.ServerDialNodesContext(ctx)
 	if err != nil {
 		h.log.Warn("list server_dial nodes failed", "err", err)
 		return
@@ -396,6 +413,13 @@ func (h *Hub) ServerDialRecoveryReady(uuid string) bool {
 // an empty lane keeps the single adaptive data profile (legacy/single-lane and
 // older server_dial agents), which never issues a SessionID or opens a data lane.
 func (h *Hub) acceptYamuxServer(netConn net.Conn, lane string, remoteOpt ...string) (*Session, func(), error) {
+	return h.acceptYamuxServerAs(netConn, lane, "", remoteOpt...)
+}
+
+// acceptYamuxServerAs is acceptYamuxServer for a connection another cluster
+// member relays: sessionID, when set, is the identity that member already
+// gave the agent, so the agent's data lane keeps matching this session.
+func (h *Hub) acceptYamuxServerAs(netConn net.Conn, lane, sessionID string, remoteOpt ...string) (*Session, func(), error) {
 	profile := proto.LaneData
 	if lane == proto.LaneCtrl {
 		profile = proto.LaneCtrl
@@ -423,7 +447,10 @@ func (h *Hub) acceptYamuxServer(netConn net.Conn, lane string, remoteOpt ...stri
 
 	sess := newSession(h, ysess, ctrl, remoteOpt...)
 	if lane == proto.LaneCtrl {
-		id, genErr := newSessionID()
+		id, genErr := sessionID, error(nil)
+		if id == "" {
+			id, genErr = newSessionID()
+		}
 		if genErr != nil {
 			_ = ysess.Close()
 			return nil, nil, genErr
@@ -480,6 +507,7 @@ func (h *Hub) register(s *Session) {
 		old.Close()
 	}
 	h.sessions[s.NodeUUID] = s
+	h.noteReplacedLocked(s, old)
 	duplicate, flagged := h.duplicates.observe(s, old, h.now()) // under h.mu: in replacement order
 	h.mu.Unlock()
 	if flagged {

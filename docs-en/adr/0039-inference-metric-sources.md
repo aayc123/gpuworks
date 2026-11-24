@@ -42,8 +42,12 @@ Deployment snapshots freeze launch configuration, whereas metric mappings determ
 
 - Engines with changed prefixes, such as TensorFold, integrate with dashboards through template declarations. Engines retaining vLLM / SGLang naming provide data when deployed as callable even without a declaration.
 - After a template author changes a mapping, running deployments apply it on the next scrape (≤ 10 seconds), without a restart or redeployment.
-- The gateway measures TTFT, duration, and engine-reported usage token counts for every forwarded response (`gpuworks_proxy_*`, with names also registered in this vocabulary). Monitoring selects sources by signal: TTFT, end-to-end duration, input/output tokens, and running requests use engine values when reported, otherwise gateway values. The single decision point is the signal source catalog in `monitor` (`window_sources.go`). The UI does not label sources; differences in measurement definitions are documented in the monitoring documentation.
+- The gateway measures TTFT, duration, and engine-reported usage token counts for every forwarded response (`gpuworks_proxy_*`, with names also registered in this vocabulary). Monitoring selects sources by signal: TTFT, end-to-end duration, input/output tokens, running requests, and prefix cache hit rate use engine values when reported, otherwise gateway values. The single decision point is the signal source catalog in `monitor` (`window_sources.go`). The UI does not label sources; differences in measurement definitions are documented in the monitoring documentation.
 - Documentation: [Inference Metric Vocabulary](../reference/inference-metrics.md), [`api.metrics` Syntax](../reference/inference-catalog-spec.md#apimetrics引擎指标映射),
   [Declare Engine Metrics for an Inference Template](../how-to/declare-engine-metrics.md).
 
-<!-- translation-source-sha256: 0be33ce7528b2ad620f0e6a770d86e030d6a2440bfbf01959794935e20b6ab16 -->
+<!-- translation-source-sha256: 0fdb9febe543615eaeb859e60ba2b60bbe913d865a32b724202fa8dbbb1c1085 # ADR 0039: Inference Metric Sources Are Layered; the Server Alone Resolves Observation Configuration and Updates It In Place at Runtime -->
+<!-- translation-source-sha256: c4cb1836b18e70825542e9bb505031c83305ae6b2caebe6409180b0154555fea ## Context -->
+<!-- translation-source-sha256: 3666bcebb0fd924903a4c0df8dd5a1f23f460f7ae00cc251bfba92188843bd9c ## Decision -->
+<!-- translation-source-sha256: 1e7e48bbd4723bd6cd83af7ce8dbb27634a95f406b9926014e8e94e7c2e83c93 ## Tradeoffs -->
+<!-- translation-source-sha256: a4e7519c4e29c20267ca9391b48a4b59bb928e1433b2d19eb6397e287d70b96e ## Consequences -->

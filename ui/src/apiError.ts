@@ -1,7 +1,10 @@
 import { acceleratorMessageParams } from "./acceleratorMessages";
 import { formatBytes } from "./format";
 import { notifySessionExpired } from "./session";
+import { CLUSTER_UPGRADE_CODE, notifyClusterUpgrade } from "./clusterUpgrade";
 import { diagnosticReport, type DiagnosticReport } from "./diagnosticChecks";
+import type { TFunction } from "i18next";
+import { placementRefusalText } from "./pages/deploy/deploySchedule";
 
 export interface APIErrorPayload {
   error?: string;
@@ -61,6 +64,16 @@ export function apiErrorText(t: APIErrorTranslator, error: unknown): string {
     return t("apiErrorDetail", { category, detail, defaultValue: `${category}: ${detail}` });
   }
   const params = { ...error.params };
+  if (error.code === "IMAGE_ARCHIVE_LOAD_FAILED") {
+    const reason = String(params.reason ?? "load_failed");
+    const fallback = t("apiError.IMAGE_ARCHIVE_LOAD_FAILED", {});
+    const fileReason = t(`images:archivePreviewReason.${reason}`, { defaultValue: fallback });
+    return t(`images:archiveLoadReason.${reason}`, { defaultValue: fileReason });
+  }
+  if (error.code === "IMAGE_ARCHIVE_PREVIEW_FAILED") {
+    const fallback = t("apiError.IMAGE_ARCHIVE_PREVIEW_FAILED", {});
+    return t(`images:archivePreviewReason.${String(params.reason ?? "unreadable")}`, { defaultValue: fallback });
+  }
   if (error.code === "SETTING_REMOVED") {
     const target = params.setting === "default_model_source" ? "modelSource"
       : params.route === "/api/v1/pull/source-rules" ? "sourceRules"
@@ -95,6 +108,7 @@ export function apiErrorText(t: APIErrorTranslator, error: unknown): string {
     return t("acceleratorFeature.unsupported", { ...acceleratorMessageParams(t, params), defaultValue: error.fallback || error.code });
   }
   if (error.code === "UNIT_PLACEMENT_NONE") params.reasons = placementShortfall(t, params);
+  if (error.code === "DISTRIBUTED_PARALLELISM_UNAVAILABLE") params.reason = distributedRefusal(t, params);
   if (error.code === "SERVER_STORAGE_FULL" && typeof params.path === "string" && typeof params.available_bytes === "number" && typeof params.total_bytes === "number") {
     return t("serverStorageFull.at", { path: params.path, available: formatBytes(params.available_bytes), total: formatBytes(params.total_bytes), defaultValue: error.fallback || error.code });
   }
@@ -122,6 +136,19 @@ export function placementShortfall(t: APIErrorTranslator, params: Record<string,
     .map((check) => t(`placementShortfall.${check === "busy" && params.per_rank != null ? "busyPerRank" : check}`, { n: params[check], per_rank: params.per_rank, names: ucxNetlinkNames(params) }));
   if (params.largest != null) parts.push(t("placementShortfall.largest", { n: params.largest }));
   return parts.join(" · ");
+}
+
+/** Why the rank in params.node refused the recommended layouts: one of the
+ * recommendation's own reasons, or a scheduler code worded as the deploy form
+ * words a node's refusal. The reason's params travel in params.reason_params. */
+function distributedRefusal(t: APIErrorTranslator, params: Record<string, unknown>): string {
+  const reason = String(params.reason ?? "");
+  const reasonParams = typeof params.reason_params === "object" && params.reason_params !== null
+    ? params.reason_params as Record<string, unknown> : {};
+  const own = t(`distributedRecommendationReason.${reason}`, { ...reasonParams, ns: "deploy", defaultValue: "" });
+  if (own && own !== `distributedRecommendationReason.${reason}`) return own;
+  const tDeploy = (key: string, options: Record<string, unknown> = {}) => t(key, { ns: "deploy", ...options });
+  return placementRefusalText(tDeploy as unknown as TFunction<"deploy">, { code: reason, params: reasonParams });
 }
 
 const pullSettingReasons = new Set(["name_required", "name_duplicate", "max_bytes", "nonnegative", "invalid_text", "requirements_invalid"]);
@@ -182,6 +209,7 @@ export async function apiResponseError(response: Response, fallback: string): Pr
   }
   const detail = payload?.error || payload?.message || raw || fallback;
   if (response.status === 401 && payload?.code === "AUTHENTICATION_REQUIRED") notifySessionExpired();
+  if (response.status === 503 && payload?.code === CLUSTER_UPGRADE_CODE) notifyClusterUpgrade();
   if (payload?.code) return new APIError(payload.code, payload.params, detail, response.status, diagnosticReport(payload.diagnostics), response.headers.get("X-Request-ID") || undefined);
   return new Error(detail);
 }

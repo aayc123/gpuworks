@@ -45,7 +45,7 @@
     "restarting": "服务端正在重启至 {{version}}",
     "unknown": "升级结果待确认",
     "recheckRunning": "重新核对运行版本",
-    "unknownHelp": "5 分钟内未收到 {{version}} 应答。此页每 15 秒核对一次，也可查看服务端日志和 install-history.jsonl。",
+    "unknownNote": "5 分钟内未收到 {{version}} 应答，此页每 15 秒重查。详见服务端日志。",
     "probe": {
       "offline": "{{time}} 核对时服务端仍未应答。",
       "unconfirmed": "{{time}} 核对时 {{version}} 已应答，尚未确认本次回滚。"
@@ -62,11 +62,11 @@
     "failed": "未能安装 {{version}}，可重新检查并选择版本。"
   },
   "updates": {
+    "updateGroup": "更新版本",
     "buildFields": {"channel": "构建渠道", "builtAt": "构建时间", "matched": "匹配发布版本"},
     "updateItem": "更新项目",
     "channelLatest": "渠道最新",
     "title": "版本与更新",
-    "description": "检查并更新服务端版本、系统镜像目录与推理模板目录；不能联网时可以上传文件更新。",
     "check": "检查更新",
     "unavailable": "暂时无法检查更新",
     "unavailableHelp": "请确认服务端能访问外网（需要代理时在服务端主机上设置 HTTPS_PROXY）。不能联网时，系统镜像目录与推理模板目录可以在这里上传文件更新，服务端可以上传升级包或用 gpuworks upgrade --archive 升级。", "checking": "正在检查…", "unpublished": "{{channel}}渠道还没有发布任何版本", "unpublishedHelp": "发布源都能访问，只是这个渠道里还没有内容。可以切回另一个渠道，或等正式版本发布后再检查；系统镜像目录与推理模板目录仍可以在这里上传文件更新。", "invalidIndex": "发布源返回的内容没有通过签名校验", "invalidIndexHelp": "服务端连上了发布源，但收到的不是有效的发布索引：常见于需要登录认证的网关或代理拦截了请求。请检查服务端主机的出网代理与网关设置，稍后再检查；期间可以在这里上传文件更新。",
@@ -102,7 +102,11 @@
     "serverConfirm": "服务端会先备份数据库、主密钥与当前二进制，再替换二进制并重启，期间控制台与 /v1 网关大约中断一分钟，节点上的推理服务不受影响。新版本起不来时会自动恢复备份、换回当前版本。",
     "serverUpgrading": "正在从 {{from}} 升级到 {{to}}，服务端正在重启…",
     "serverUpgradingHelp": "页面会等新版本应答后自动刷新；新版本起不来时服务端会自动回滚到原版本。",
-    "agentFollowup": "服务端已升级，Agent 目标版本 {{version}}",
+    "agentFollowup": {
+      "upgrade": "服务端已升级到 {{version}}，{{count}} 台节点的 Agent 需要升级",
+      "blocked": "服务端已升级到 {{version}}，{{count}} 台节点的 Agent 暂不可升级",
+      "none": "服务端已升级到 {{version}}"
+    },
     "viewNodes": "查看计算节点",
     "serverUpgraded": "服务端已升级到 {{version}}",
     "serverNotBack": "5 分钟内没有看到 {{version}} 应答，可能已回滚，请查看服务端日志与安装目录下的 install-history.jsonl。",
@@ -112,19 +116,20 @@
       "no_service_manager": "这个进程退出后没有服务管理器把它拉起来（systemd 或 gpuworks serve --supervise），所以不能在控制台升级。",
       "not_installed": "服务端不是用 gpuworks install 安装的，不能在控制台升级。",
       "not_installed_binary": "服务端运行的不是安装目录里的二进制，不能在控制台升级。",
+      "cluster_member": "集群成员请用 gpuworks cluster upgrade 升级。",
       "not_writable": "服务账户没有安装目录的写权限，不能在控制台升级。"
     },
     "channel": "更新渠道",
     "channelRelease": "正式发布版（release）",
     "channelNightly": "滚动预览版（nightly）",
-    "channelReleaseHelp": "只接收打过版本号的正式版本，更新少、更稳。",
-    "channelNightlyHelp": "每次主干构建都会推送，更新快，适合尝鲜和内部测试。",
+    "channelReleaseNote": "只接收打过版本号的正式版本，更新少、更稳。",
+    "channelNightlyNote": "每次主干构建都会推送，更新快，适合尝鲜和内部测试。",
     "autoCheck": "自动检测新版本",
     "autoCheckOnHelp": "开启时，打开控制台会自动向发布源检查更新（服务端每小时最多一次），并附带 server 与 agent 的版本号。",
     "autoCheckOffHelp": "已关闭：服务端不再自动检查。点「检查更新」时仍会读取版本索引。",
     "notChecked": "尚未检查更新",
     "notCheckedHelp": "自动检测已关闭。点右上角「检查更新」手动检查，或在这里上传文件更新。",
-    "currentBuild": "当前控制面构建",
+    "currentBuild": "当前版本信息",
     "checkedAt": "检查于 {{time}}"
   },
   "usageReport": {
@@ -136,7 +141,6 @@
   "page": { "title": "设置", "description": "管理品牌外观、版本更新、镜像和模型从哪里拉取、节点与部署策略、安全与访问，以及 AI 服务等外部集成", "breadcrumb": { "platform": "平台", "settings": "设置" }, "tabs": { "general": "通用", "pull": "镜像与模型拉取", "nodes": "节点与部署", "access": "安全与访问", "integrations": "集成", "data": "数据保留", "diagnostics": "诊断" } },
   "branding": {
     "title": "品牌外观",
-    "description": "自定义 Logo、产品名称、顶栏标题和登录页介绍文字。留空的项使用内置默认值，默认文案会跟随界面语言；自定义的文字原样显示，不做翻译。",
     "adminOnly": "只有管理员可以修改品牌外观。",
     "logo": "Logo",
     "logoHelp": "显示在顶栏左侧和登录页上，按原比例缩放，最宽 160 像素、最高 24 像素，横版或方形图片都可以。支持 PNG、JPEG、WebP、SVG。上传后可以裁切；位图会自动缩小到 256 像素以内并压缩，未裁切且体积较小的 SVG 原样保留。",
@@ -390,7 +394,7 @@
     }
   },
   "sshKey": { "title": "SSH 密钥", "description": "平台自己的 SSH 密钥对。添加节点、预检查和带外恢复都用它登录，节点只需授权一次下面的公钥。私钥加密保存，不会显示。", "publicKey": "公钥", "fingerprint": "指纹", "createdAt": "创建时间", "authorizeCommand": "授权命令", "import": "导入密钥", "importTitle": "导入已有私钥", "importHelp": "把节点已经信任的一把密钥用作平台密钥。只接受未加密的 OpenSSH 或 PKCS#8 私钥，导入后替换当前密钥。", "privateKey": "私钥", "imported": "平台 SSH 密钥已导入", "importFailed": "导入失败：{{detail } }", "rotate": "重新生成", "rotateConfirm": "重新生成平台 SSH 密钥？", "rotateWarning": "只授权了当前公钥的节点将不再接受平台登录，带外恢复会失败，直到它们授权新公钥。", "rotated": "平台 SSH 密钥已重新生成", "rotateFailed": "重新生成失败：{{detail } }", "loadFailed": "读取平台 SSH 密钥失败：{{detail } }" },
-  "deployment": {"title": "部署", "saved": "部署设置已保存", "description": "集群内所有部署的默认值；单个部署可以在部署表单的「运行环境」里另设。", "startTimeout": "启动超时（默认）", "startTimeoutInvalid": "请输入 {{min}}–{{max}} 秒之间的整数。", "startTimeoutHelp": "实例启动后等待引擎健康检查通过的最长时间，超时即判定这次启动失败并按重试策略重启。没有自行设置的部署使用这个值；修改只影响之后启动的实例。范围 {{min}}–{{max}} 秒。", "seconds": "秒"},
+  "deployment": {"title": "部署", "saved": "部署设置已保存", "description": "集群内所有部署的默认值；单个部署可以在部署表单的「运行环境」里另设。", "startTimeout": "启动超时（默认）", "startTimeoutInvalid": "请输入 {{min}}–{{max}} 秒之间的整数。", "startTimeoutHelp": "实例启动后等待引擎健康检查通过的最长时间，超时即判定这次启动失败并按重试策略重启。没有自行设置的部署使用这个值；修改只影响之后启动的实例。范围 {{min}}–{{max}} 秒。", "seconds": "秒", "foreignHeadroom": "平台外进程旁的预留余量", "foreignHeadroomHint": "与平台外进程共用的卡上，在它们的占用之外不分配的显存。", "foreignHeadroomHelp": "取卡显存的比例与最小值中较大的一个。\n平台外进程的显存每分钟读取一次，它增长时由余量承接，避免它和同卡实例显存不足。\n修改只影响之后的放置。", "foreignHeadroomTipLabel": "预留余量的说明", "warning": {"noForeignHeadroom": "不留余量时，平台外进程显存一增长，它和同卡实例都可能因显存不足失败。仅在这些进程显存固定时使用。"}, "foreignHeadroomPct": "占卡显存比例", "foreignHeadroomMin": "最小值", "foreignHeadroomInvalid": "比例填 0–{{pctMax}} 的整数，最小值填 0–{{gibMax}} GiB。"},
   "terminal": { "title": "Web 终端", "saved": "Web 终端设置已保存", "description": "在浏览器中直接打开计算节点的宿主机 shell，仅管理员可用。", "auditHelp": "审计只记录元数据：操作者、节点、时长、传输字节数。", "privacy": "不记录任何终端输入与输出内容。", "enabled": "启用 Web 终端", "enabledHelp": "关闭后所有节点的终端入口立即失效，已建立的会话也会被拒绝重连。", "idle": "空闲超时（分钟）", "idleHelp": "仅按操作者输入判定；持续输出的命令（如 watch nvidia-smi）不会续期。", "grace": "进程回收宽限（秒）", "graceHelp": "关闭会话后先发 SIGTERM，超过该时间仍未退出则 SIGKILL 整个会话，避免残留进程占用显存。", "nodeLimit": "单节点并发上限", "nodeLimitHelp": "超出后新建终端返回 429。", "globalLimit": "平台并发上限", "globalLimitHelp": "不得小于单节点上限。" },
   "orphanCleanup": { "title": "孤儿容器清理", "description": "开启后，每个 agent 在状态同步时会清除不在其期望状态内的 gpuworks 命名容器。", "enabled": "启用孤儿容器清理" },
   "security": { "title": "安全", "description": "以暴露面换取便利的全平台开关，只在清楚谁能访问到什么时再改。", "previewNetwork": "允许试验场 HTML 预览发起网络请求", "previewNetworkHelp": "关闭时：预览页可以从 HTTPS 站点加载脚本、样式和图片，但 fetch、XHR、WebSocket 请求和所有 HTTP 资源都会被拦截。开启后：不再有任何网络限制，模型生成的页面能访问查看者浏览器能到达的任何地址，包括内网服务和本控制台自身。无论开关如何，预览页都拿不到控制台的登录会话。", "inferenceOpenAccess": "接受不带令牌的 /v1 推理请求", "inferenceOpenAccessHelp": "关闭时：每个 /v1 请求都必须带推理令牌，不带令牌的请求一律拒绝。开启后：不带令牌的请求会被匿名放行，任何能访问本服务的人都能调用已部署模型、占用其 GPU；带了令牌的请求仍然照常校验。吊销最后一个令牌不再开放网关，开放与否只由这个开关决定。", "adminOnly": "只有管理员可以修改安全设置。", "saved": "安全设置已保存" },

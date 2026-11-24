@@ -34,12 +34,14 @@ import CloudProvidersPage from "./pages/CloudProvidersPage";
 import SettingsPage from "./pages/SettingsPage";
 import LogsPage from "./pages/LogsPage";
 import SessionBoundary from "./components/SessionBoundary";
+import ClusterUpgradeBoundary from "./components/ClusterUpgradeScreen";
 import UserMenu from "./components/UserMenu";
 import NotFoundPage from "./pages/NotFoundPage";
 import ImagesPage from "./pages/ImagesPage";
 import StoragePage from "./pages/StoragePage";
 import { StorageDetailRedirect } from "./pages/storage/storageLinks";
 import NetworksPage from "./pages/networks/NetworksPage";
+import NetworkTopologyGuide from "./pages/networks/topology/NetworkTopologyGuide";
 import { NetworkDetailRedirect } from "./pages/networks/networkLinks";
 import GPUPage from "./pages/GPUPage";
 import TerminalPage from "./pages/TerminalPage";
@@ -65,7 +67,7 @@ import "./pages/playground/playground.css";
 
 export default function App() {
   return (
-    <>
+    <ClusterUpgradeBoundary>
       <FeedbackHost />
       <SessionBoundary onLogout={signOutPlayground}>
         {(logout) => <AppErrorBoundary>
@@ -77,7 +79,7 @@ export default function App() {
           </Routes>
         </AppErrorBoundary>}
       </SessionBoundary>
-    </>
+    </ClusterUpgradeBoundary>
   );
 }
 
@@ -138,6 +140,7 @@ function AuthenticatedShell({ onLogout }: { onLogout: () => Promise<void> }) {
             <Route path="/storage" element={<StoragePage />} />
             <Route path="/storage/:id" element={<StorageDetailRedirect />} />
             <Route path="/networks" element={<NetworksPage />} />
+            <Route path="/networks/guide" element={<NetworkTopologyGuide />} />
             <Route path="/networks/:id" element={<NetworkDetailRedirect />} />
             {/* The old models address: same page, so the menu and its breadcrumb follow /models. */}
             <Route path="/ai-store/ai-model" element={<ModelsAlias />} />

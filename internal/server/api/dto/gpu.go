@@ -119,11 +119,24 @@ type PhysicalGPU struct {
 	// used to be a second column, work_state, saying normal/abnormal/
 	// unknown; it answered this same question from the same verdict and
 	// the two could only ever agree.
-	AllocationState string        `json:"allocation_state"`
-	AllocatedBytes  int64         `json:"allocated_bytes"`
-	AvailableBytes  int64         `json:"available_bytes"`
-	Occupants       []GPUOccupant `json:"occupants"`
-	Load            GPULoad       `json:"load"`
+	AllocationState string `json:"allocation_state"`
+	AllocatedBytes  int64  `json:"allocated_bytes"`
+	// SleepingBytes is the residue sleeping instances keep on the card. What
+	// is left of the total after AllocatedBytes, SleepingBytes and
+	// AvailableBytes is withheld for another reason (processes outside the
+	// platform and the headroom beside them, or a node nobody can reach), so
+	// a client need not call all of it a sleeper's.
+	SleepingBytes int64 `json:"sleeping_bytes"`
+	// ForeignBytes is the memory of processes outside the platform that the
+	// free figure leaves out (planning.ForeignHold); zero when none is
+	// counted, which includes holders whose memory is not known. What is
+	// withheld beyond it on a card of an online node is the headroom the
+	// deployment policy keeps beside them, so the two are told apart: one is
+	// a reading of somebody's use, the other memory nobody uses.
+	ForeignBytes   int64         `json:"foreign_bytes"`
+	AvailableBytes int64         `json:"available_bytes"`
+	Occupants      []GPUOccupant `json:"occupants"`
+	Load           GPULoad       `json:"load"`
 }
 
 type GPUListResponse struct {

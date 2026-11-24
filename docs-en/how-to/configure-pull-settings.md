@@ -25,7 +25,7 @@ When a deployment starts, scales out, or is rebuilt, it first uses complete copi
 - The native pull on runveil (udocker) nodes decides for itself how many connections to open and deals with slowness at the connection level; see [Limit Connections for Image Pulls](#限制镜像拉取的连接数runveil-节点). Each registry host has a connection budget that starts at 4 connections and grows to at most 16 only while more connections still raise the overall rate; a 429 or 503, or a refused connection, halves it and waits out `Retry-After`. A connection that delivers no data for 2 minutes, or falls far behind the other connections of the same pull for two windows in a row (with an absolute floor of 16 KiB/s over 30 seconds), is replaced by a new one that resumes from the bytes already received instead of re-downloading the layer. Each download segment uses its own TCP connection (HTTP/1.1), so one slow connection does not hold back the others.
 - A registry with a network failure, transfer failure, or stall enters a 30-minute cooldown on that node. It is placed last among the probe candidates but is not removed. A missing image or denied authentication or permissions also causes a switch to another candidate, but does not put the entire registry in cooldown. An unavailable runtime ends the current pull immediately.
 - By default, models download from their registered site (Hugging Face or ModelScope). Nodes connect directly, with no proxy configured (the node's own environment variables such as `HTTP_PROXY` still apply). Models with a directory URL source download only from their own directory.
-- A preset sync group, `default-all-nodes`, includes all nodes: nodes automatically copy images and models from each other. If two nodes cannot connect (for example, two cloud containers are each behind NAT), the copy fails within about 10 seconds. That pair of nodes does not retry for 3 hours, and the replica pulls the files itself instead.
+- A preset sync group, `default-all-nodes`, includes all nodes: nodes automatically copy images and models from each other. If two nodes cannot connect (for example, two cloud containers are each behind NAT), the copy fails within about 10 seconds. That pair of nodes does not retry for 3 hours, and the replica pulls the files itself instead. An image copied automatically for a deployment first uses the direct connection only; it is relayed through the management server only after the replica's own pull has failed as well.
 
 Reachability and latency probes do not guarantee actual download speed. Use download progress on the target node as the final measure. Docker usually reports per-layer byte progress. The 3-minute stall check above does not apply when there is no byte progress, during unpacking, or during image registration after all bytes have arrived. Each candidate has a maximum of 60 minutes from the start of the pull through the end of unpacking.
 
@@ -313,5 +313,22 @@ Behavior changes:
 - Models with directory URL sources previously connected directly without a proxy. They now download through the node proxy. Add internal file servers to `no_proxy`; otherwise, requests are sent through the proxy.
 - Model downloads previously retried the same address up to 16 times. They now switch addresses as described above when candidates remain; only the last address retains the 16-attempt limit.
 
-<!-- translation-source-sha256: 4057a5ac3e8e716a445adc8722c8255c8c7dad2c4ea151add93cf4aba3a12f77 -->
+<!-- translation-source-sha256: b2bb0f5b303413a2df1c269b4e073eebcc4dea23582e259e917973be54578c62 # Configure Image and Model Pulls: Source Rules, Proxies, Sync Groups, and Credentials -->
+<!-- translation-source-sha256: a026840d9ebadd62f96e0e996a0a996dbf9d22701282bbcf2c29bf6e39fdfa92 ## Behavior Without Configuration -->
+<!-- translation-source-sha256: e9714272db01a3a0ee3070ab26c9bfa46124826a4e1bffb3f4754d3b7c8617b3 ## Source Rules -->
+<!-- translation-source-sha256: 29fe09cad805358fe6694f3bfc90ba4a4811da6b304fbf2325ae632f3868c7a9 ### Image Rules -->
+<!-- translation-source-sha256: 28a4b6917b37d7b6fe5bf5f879afe4e83d2420334180b307a5bfbea504093446 ### Common Rule Examples -->
+<!-- translation-source-sha256: ef6708e98dae6c1db0e7561a7dddf48d9e1126d1f1ce58cb4f0719c3ba22fd9c ### Site Rules (Models) -->
+<!-- translation-source-sha256: c6e410ed567a5735700cc9adb8f1ea8fe72d5914495e5455a6ac0a8939f7b1e9 ## Common Network Configuration Examples -->
+<!-- translation-source-sha256: 1ecb03a13fe31a59b9a1e157fa19de2f9d03bb444b7f8491b0807d528b4b377a ### About hf-mirror.com -->
+<!-- translation-source-sha256: dd2e0614e8a2a81d9a49a625fe8418243f243f3d3e2fc72be28221c44792c7af ### Fully Offline: Two Blocking Rules -->
+<!-- translation-source-sha256: b3ab1bba887ee509b5ca7c0bed44ad1079a3213a4b2d4f95aaebdd88f5fcd0f4 ### Import Models Offline -->
+<!-- translation-source-sha256: d2ea8575dfd89234628b2455fcb1956c054b09749452418ab1960b4b0f0d5f33 ## Test Connectivity -->
+<!-- translation-source-sha256: 3befad7889d4e2269a34a8faf98ed413c32330cf52b6097e7b20fad22cba7c40 ## Sync Groups -->
+<!-- translation-source-sha256: 23d1ad03fb7b0f143e48097d6f603bd32aa2678bd273b09f7a59e1338c0df559 ## Credentials -->
+<!-- translation-source-sha256: 6fdb5b07985559487589591641981a96f27bb5bfcd3e6f9e8dad23ad9205dcc7 ## Proxies -->
+<!-- translation-source-sha256: 2cadb69deca2840543f79952af40d08274842572ddaf4007a61666d8fc044795 ### dockerd -->
+<!-- translation-source-sha256: f7faeaeea2368e96db471b99c6441d6921cb5a5910f53e21d908b6bd7cff574b ## Limit Connections for Image Pulls (runveil Nodes) -->
+<!-- translation-source-sha256: 1f5c4f11670d97521e84e7f5ba4e5d78fe0c4e2a5a41a3330484f830d7be18ff ## Estimates on the Deployment Page -->
+<!-- translation-source-sha256: 1eb299016a9a845b16895f992ee3c13f589a482cffd24853650a5cf1b6f69c94 ## Upgrade from Earlier Versions -->
 <!-- translation-localized-code-block: cc414d43679c3ca4bb839fd237cd475e74be2c5c6d42c27abdf2bcf1101fe4e9 787bbac38ac38f3870567bcb2222c08d8463c6a1a327f386fb37b2909cf8c6fd Translate descriptive Chinese placeholders, preserving quotes, command flags, API fields, and actual paths. -->

@@ -120,8 +120,8 @@
     "PLANNING_KV_BELOW_CONTEXT": "The estimated KV cache capacity is {{kv_tokens}} tokens, below the maximum context of {{max_model_len}}. Actual capacity depends on the attention architecture and inference engine, so the estimate may be inaccurate. You can lower the maximum context or continue with the current settings; the engine may fail to start.",
     "IMAGE_PARTITION_PROFILE_UNBUILT": "Image CANN {{framework_version}} × {{arch}} is not in the built dGPU asset matrix; the probe only verifies the node execution path, the image itself may still be incompatible.",
     "IMAGE_PARTITION_PROFILE_UNVERIFIED": "The dGPU assets for image CANN {{framework_version}} × {{arch}} have not been verified on real hardware yet.",
-    "PD_CARD_NETWORK_UNREACHABLE": "The latest accelerator-card test on {{network}} found unreachable selected PD ports: {{pairs}}. Verified bidirectional alternatives: {{available}} (— means none). Select a reachable pair and run the card matrix test again before deploying.",
-    "PD_CARD_NETWORK_UNTESTED": "The PD ports on {{network}} have no verified bidirectional connectivity: {{pairs}}. Pin the cards and run a card matrix test. Verified alternatives: {{available}} (— means none). Retest after 24 hours.",
+    "PD_CARD_NETWORK_UNREACHABLE": "The selected PD ports on {{network}} cannot reach each other: {{pairs}} (verified pairs: {{available}}; — means none). Select a reachable pair and run the card matrix test again before deploying.",
+    "PD_CARD_NETWORK_UNTESTED": "The PD ports on {{network}} have no verified bidirectional connectivity: {{pairs}} (verified pairs: {{available}}; — means none). Pin the cards and run a card matrix test; results hold for 24 hours.",
     "PD_UNVERIFIED_COMBINATION": "PD combined with {{feature}} is allowed but has not been verified on real hardware yet.",
     "PD_GPU_MODELS_DIFFER": "The PD roles run on different GPU models ({{models}}); throughput and latency will differ by role.",
     "PD_SAME_NODE_THROUGHPUT": "Every PD instance is on the same node, which trades some throughput for lower decode latency compared with spreading them across nodes.",
@@ -135,7 +135,9 @@
     "ASCEND_SLEEP_EXPANDABLE_SEGMENTS_DISABLED": "Sleep mode on Ascend cannot run with expandable segments, so {{variable}} was changed to {{value}}; if memory runs out, lower gpu_memory_utilization or max_model_len, or turn sleep off.",
     "KUBE_ENGINE_PORTS_OUTSIDE": "Running instances hold ports outside the new engine port range {{range}}: {{instances}}. They keep their ports and keep running; only instances started later use the new range.",
     "PD_UCX_NETLINK_HANG": "The kernel of {{names}} makes UCX hang (its IPv6 route dump ends in a way UCX cannot read), and PD mode {{mode}} moves the KV with NIXL over Ethernet, so the engine will likely never finish starting. The deployment can still be created; turn IPv6 off on the node first (this disables IPv6 for the whole host); the commands are listed below.",
-    "PD_UCX_NETLINK_HANG_RDMA": "The kernel of {{names}} makes UCX hang (its IPv6 route dump ends in a way UCX cannot read). On the RDMA network {{network}} UCX is held to RDMA transports and may not run that check, so this PD deployment is allowed; if its engine hangs while starting, turn IPv6 off on the node (this disables IPv6 for the whole host): {{fix}}"
+    "PD_UCX_NETLINK_HANG_RDMA": "The kernel of {{names}} makes UCX hang (its IPv6 route dump ends in a way UCX cannot read). On the RDMA network {{network}} UCX is held to RDMA transports and may not run that check, so this PD deployment is allowed; if its engine hangs while starting, turn IPv6 off on the node (this disables IPv6 for the whole host): {{fix}}",
+    "DOCKER_ARG_PRIVILEGED": "{{arg}} lets the container use every device on the node and change kernel settings, which gives it control of the node. Keep it only if the image needs it.",
+    "DOCKER_ARG_SHARED_PID": "{{arg}} lets the container see and end other instances' processes on the node. Keep it only if the image needs it."
   },
   "warningFeature": {
     "dgpu": "dynamic GPU (dGPU)",
@@ -154,6 +156,8 @@
     "partition_unavailable": "The selected node has no ready dGPU backend. Disable dGPU or select a node whose dGPU capability is ready.",
     "insufficient_disk": "The node does not have enough disk space for the model weights. Free some disk space or select another node.",
     "insufficient_runtime_disk": "The runtime filesystem does not have enough space to unpack the selected image. Free runtime storage or select another node.",
+    "insufficient_managed_dir_disk": "The node's managed-directory disk cannot hold the template's writable directories on top of the disk reserve (and the image and weights when they share that disk). Free space there or select another node.",
+    "agent_capability_missing": "The agent on {{node}} is older than this launch needs: it does not provide {{capability}}, which the inference template uses. Upgrade the node's agent or select another node.",
     "sleep_unsupported_on_node": "{{vendor}} nodes cannot put an engine to sleep. Turn off sleep for this deployment or select another node.",
     "multi_node_unsupported_on_node": "{{vendor}} nodes cannot run ranks across several nodes. Deploy on a single node or select other nodes.",
     "pd_unsupported_on_node": "PD disaggregation is not supported on {{vendor}} nodes. Select other nodes.",
@@ -166,9 +170,9 @@
     "storage_disabled": "The node lacks the model and its storage is read-only, so nothing can be put there. Enable the storage or choose another one.",
     "no_healthy_gpu": "None of the node's own accelerators is at a health level that can serve. Resolve the GPU warnings or faults, or select another node.",
     "no_owned_gpu": "The node has no accelerator of its own to use: they may all be passed through to virtual machines, have no driver bound, or be held by another driver. Check the node's accelerator list or select another node.",
-    "gpus_held_outside_platform": "The accelerators this deployment may use are occupied by processes outside the platform. Free those processes on the node or select another node. A dGPU deployment with a memory limit can share such a card when the node's agent reports their memory and the node allows it, or when you pick the card yourself.",
+    "gpus_held_outside_platform": "The accelerators this deployment may use are occupied by processes outside the platform. Free them, enable scheduling on those cards, or select another node.",
     "held_outside_platform_sleep": "The card this deployment could share is also used by processes outside the platform, and a deployment that sleeps could not be woken there while they run. Turn off sleep for this deployment or select another card.",
-    "held_outside_platform_not_allowed": "Cards on this node that could take this deployment are used by processes outside the platform, and the node does not allow partitions beside them. Turn on \"{{settingLabel}}\" in the node's placement policy, or pick the cards yourself to share them for this deployment.",
+    "held_outside_platform_not_allowed": "GPU {{gpus}} on this node are used by processes outside the platform and scheduling is not enabled on them. Enable scheduling on them in the node's GPU tab, or pick the cards yourself.",
     "no_free_gpu": "The selected node has no free GPUs. Stop or sleep another deployment, or select another node.",
     "placement_rejected": "The selected GPU set does not satisfy this template's placement rules. Adjust the GPU count or choose compatible GPUs.",
     "engine_ports_exhausted": "Every engine port {{start}}–{{end}} on node {{node}} is in use by instances or other host services. Free a port in that range or select another node.",
@@ -199,7 +203,7 @@
     "tight_fit": "GPU capacity closely matches the VRAM requirement.",
     "placement_preference": "The template prefers this GPU count: {{count}} GPUs.",
     "degraded_gpus_used": "{{count}} of the chosen GPUs are at warning level; they are used only because the healthy GPUs cannot take this deployment.",
-    "foreign_shared_gpus_used": "{{count}} of the chosen GPUs are shared with processes outside the platform (up to {{foreign_gib}} GiB); they are used only because no card free of such processes can take this deployment. Memory is isolated, but compute and bandwidth are shared with load the platform cannot see.",
+    "foreign_shared_gpus_used": "{{count}} of the chosen GPUs are shared with processes outside the platform (up to {{foreign_gib}} GiB) because no free card can take this deployment. Compute and bandwidth are shared, which can slow inference.",
     "invalid_request": "The launch configuration reaching the scheduler is invalid: VRAM utilization {{gpu_memory_utilization}} is outside the allowed range. Reload the page and evaluate again.",
     "runtime_unsupported": "{{vendor}} requires {{required_os}}/{{required_arch}} with {{required_runtime}}; this node reports {{os}}/{{arch}} and {{runtime}}.",
     "runtime_unreported": "{{vendor}} requires {{required_os}}/{{required_arch}} with {{required_runtime}}; this node has not reported all required runtime facts.",
@@ -222,9 +226,13 @@
     "noReportedGPU": "no reported GPUs",
     "hardwareDifference": "Required: {{required}}. Reported: {{actual}}. No GPU passed the deployment hardware checks."
   },
+  "distributedRecommendationReason": {
+    "no_layout": "No TP and PP combination fits the stated degrees and these nodes' GPU counts."
+  },
   "scheduleNote": {
     "sleeping_residue": "keep {{sleeping_gib}} GiB resident for sleeping instances.",
     "foreign_held": "Processes outside the platform use {{foreign_gib}} GiB of the card, and {{foreign_headroom_gib}} GiB is kept free beside them.",
+    "foreign_held_only": "Processes outside the platform use {{foreign_gib}} GiB of the card.",
     "image_delivery_detail": "Reported failure: {{detail}}",
     "model_unavailable_detail": "Reported failure: {{detail}}",
     "plan_failed_detail": "Reported failure: {{detail}}",
@@ -457,7 +465,9 @@
     "title": "Configuration Evaluation",
     "vram": "VRAM startup estimate: {{text}}",
     "evaluationSkipped": "VRAM estimation skipped",
-    "weightUnknown": "The model weight size is not available yet. Deployment can continue and metadata will be refreshed in the background."
+    "weightUnknown": "The model weight size is not available yet. Deployment can continue and metadata will be refreshed in the background.",
+    "fieldErrors": "{{count}} setting needs changing; see the field marked in red.",
+    "fieldErrors_other": "{{count}} settings need changing; see the fields marked in red."
   },
   "confirm": {
     "title": "Confirm Configuration",
@@ -894,7 +904,7 @@
       "degrees": "Parallelism",
       "split": "TP {{tp}} × PP {{pp}}, {{perNode}} GPUs per node",
       "total": "{{gpus}} GPUs in all",
-      "fromNodes": "Once nodes are picked: one pipeline stage per node, TP over the fewest GPUs a node has",
+      "fromNodes": "Leave a degree empty to recommend a layout that fits all selected nodes.",
       "tpAutomatic": "Leave empty to size from the memory estimate and topology",
       "tpRequiredAuto": "Automatic placement needs a TP: the platform has to know how many GPUs each node gives a rank",
       "tensor": "Tensor Parallel",

@@ -61,6 +61,7 @@ The evaluation itself does not pull images or start additional containers.
 | TPOT | For successful requests, `(last output generation time − first output generation time) ÷ (output token count − 1)`. Includes only streaming requests with an observable decoding interval, at least two content chunks, and more than 1 output token |
 | E2E latency | In evaluations, this metric ends at the last generated output. **Request and session evidence** separately lists stream-completion latency, which includes finalization after output; do not interchange the two |
 | Maximum output throughput (10s) | Highest output throughput in any 10-second window within the point, without dilution from startup and finalization phases |
+| Speculative decoding (client-side approximation) | The "tokens per iteration" inferred from multi-token chunks, and the **share of the output that came from drafts** (`1 - 1 / tokens per iteration`). The UI labels the latter "acceptance rate", but its denominator is the **tokens already emitted**, not the **draft tokens proposed**, so it is not the draft acceptance rate that vLLM/SGLang report themselves and is usually higher: in one measurement on 4x 910B with MTP and 3 draft tokens this field read 52.9% while the engine's own figure was 37.2%. For the engine definition, read `vllm:spec_decode_num_{draft,accepted}_tokens_total` from the engine's `/metrics`, or `gpuworks_infer_spec_{draft,accepted}_tokens_total` from monitoring |
 
 The “Throughput vs. Interactivity Pareto” chart plots per-user output speed on the horizontal axis and output throughput on the vertical axis, with one dot per test point.
 The former “Per-user Output Throughput” metric divided output throughput by concurrency, including TTFT and gaps between requests, and is discontinued.
@@ -153,4 +154,11 @@ A single parameter scan does not establish the throughput ceiling, and stability
 Information that cannot be obtained automatically from external endpoints, such as GPU model, precision, and the actual kernel, appears as unknown. Managed deployments export snapshots of existing GPUs, TP,
 images, and startup arguments. Configuration values cannot substitute for logs or profiler evidence of the kernel actually running.
 
-<!-- translation-source-sha256: 5c8e0169bc3d87df701e48711c89ed598edc0abce56a2c34acae5e4f67e7593f -->
+<!-- translation-source-sha256: f9739b38f9f61cd86aadbd5a826ad69c9d2be2d06af88ef48c6ce0da975faf06 # Run Evaluations and Interpret Reports -->
+<!-- translation-source-sha256: 9047e3a68ea00909b4d83dbf31e066fd6c7a9e8e46be8a06d14a53af726c5670 ## Create and Complete an Evaluation Run -->
+<!-- translation-source-sha256: 31e536c2a0ab236e8edb522663d6ea858d86f46947b21739891a061b81312a0e ## Metric Definitions -->
+<!-- translation-source-sha256: 871cc2986b1a6760bc8e1ecc6f88d9a205d64ae4ead29ea543600667846329a3 ## Advanced Settings -->
+<!-- translation-source-sha256: ccc5f7a7ffa359583469d7f8fbb4edb89fc3eb27359ca9031ad7ce3825f316ba ### Choose a Load Mode -->
+<!-- translation-source-sha256: c5b36f04f4e5e599581d9aab784a1b91ed28bd76d637cf34e519a5fcbbb50973 ### Set Experience Thresholds -->
+<!-- translation-source-sha256: c3b231348f08f97ababe242abec0e4617299abc20e50ce15ffeb73d2ea31f888 ## Request and Session Evidence -->
+<!-- translation-source-sha256: f2335209bf43280e33d64f4663ee1e64be39381c877424c41afcdf2cc6882a22 ## Export and Compare -->

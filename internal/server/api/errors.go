@@ -380,7 +380,7 @@ const (
 	ErrorLaunchConfigConflict = "LAUNCH_CONFIG_CONFLICT"
 	// ErrorLaunchConfigUnsetConflict is likewise produced by deploy.Materialize.
 	ErrorLaunchConfigUnsetConflict = "LAUNCH_CONFIG_UNSET_CONFLICT"
-	// The docker argument codes are produced by deploy.ValidateContainerDockerArgs
+	// The docker argument codes are produced by deploy.ValidateDockerArgs
 	// and spelled out here for the same inventory reason; the pairs are asserted
 	// equal by TestDockerArgCodesMatchTheirProducer.
 	ErrorDockerArgPlatformManaged    = "DOCKER_ARG_PLATFORM_MANAGED"
@@ -537,6 +537,15 @@ const (
 	// ErrorBatchModelEndpoint: the deployments serving the {model} the batch
 	// was asked to send its requests to do not serve its {endpoint}.
 	ErrorBatchModelEndpoint = "BATCH_MODEL_ENDPOINT"
+
+	// Cluster enrollment. English fallbacks stay at the call site.
+	ErrorClusterTLSRequired        = "CLUSTER_TLS_REQUIRED"
+	ErrorClusterRequestInvalid     = "CLUSTER_REQUEST_INVALID"
+	ErrorClusterUnavailable        = "CLUSTER_UNAVAILABLE"
+	ErrorClusterInvitationRequired = "CLUSTER_INVITATION_REQUIRED"
+	ErrorClusterIdentityMismatch   = "CLUSTER_IDENTITY_MISMATCH"
+	ErrorClusterAdmissionRejected  = "CLUSTER_ADMISSION_REJECTED"
+	ErrorClusterUpgradeInProgress  = "CLUSTER_UPGRADE_IN_PROGRESS" // every business answer of a member during a cluster schema upgrade
 )
 
 // WarningBatchModelSleepHeld is the warning on a created batch whose {model}

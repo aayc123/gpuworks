@@ -574,14 +574,19 @@ server 重启后进行中的记录接着记；重启前最多一小时内的次�
 平台按卡的硬件身份认出自己的实例；较早版本启动、期望状态里只记了设备序号的实例，
 升级 server 时迁移会补上身份，agent 也会按最近一次探测把序号对应到卡，同样算作平台自己的。
 
-**带显存上限的 dGPU 部署可以与这些进程共用这张卡，但需要同意**：节点的放置策略里「允许分区与平台外进程共卡」（`share_with_foreign`，默认关）打开时自动放置可以用它，
-且总是先用没有这类进程的卡（同节点和跨节点都是）；开关关闭时只有手工选中这张卡（部署表单里选卡，或请求的 `placement.gpus`）才会放上去。
-开关关闭时自动放置被拒绝的原因是 `held_outside_platform_not_allowed`，界面会说出开关的名字。开关在节点详情「概览」的「放置策略」里；
-节点没有就绪的分区后端或 agent 版本较旧时，开关旁会说明它暂不生效。关闭开关不会停掉已在运行的实例，但重新放置（重启、故障替换、扩容）按新设置：
+**这张卡要接受平台的部署，需要你同意，有两种方式**：
+
+- **在这张卡上启用调度**（见[上一节](#手动启用或禁用一张卡的调度)的「调度」一项）：之后自动放置可以使用这张卡，且总是先用没有这类进程的卡（同节点和跨节点都是）。
+  启用调度是你对这张卡的明确决定，平台不再替你把关：整卡部署、外部显存未知的卡、agent 版本较旧的节点都会放上去。
+  agent 版本较旧时，平台实例上卡后它不再上报卡上原有的外部进程，卡会被当成空闲、显存可能分超；启用前先升级 agent。
+- **部署时手工选中这张卡**（部署表单里选卡，或请求的 `placement.gpus`）：只对带显存上限的 dGPU 部署放行，并且只在下文的条件都满足时。
+
+两者都没有时，自动放置被拒绝的原因是 `held_outside_platform_not_allowed`，带节点和卡号，界面会指到这些卡的「启用调度」。
+副本放上去之后卡才被外部进程占用、又没有人启用这张卡时，已在运行的实例不受影响，但重新放置（重启、故障替换、扩容）会被拒绝：
 滚动重启会停住等待而不丢副本，崩溃后的替换会进入待放置。共卡只隔离显存，算力与带宽与这些进程共享。
 放置时按剩余显存放行：卡的总显存减去这些进程占用的显存、
 再减去在其旁保留的余量（卡的 5%，至少 4 GiB）、再减去平台已有实例的占用，够这个部署的显存上限加分区开销才放上去；
-放不下时拒绝原因（`no_fit`）会列出这些进程的占用和余量，部署表单里这张卡也只对这样的部署可选。以下情况仍然不共用、
+放不下时拒绝原因（`no_fit`）会列出这些进程的占用和余量，部署表单里这张卡也只对这样的部署可选。没有启用调度的卡，以下情况即使手工选中也不共用、
 按「被平台外进程占用」拒绝：整卡部署；厂商工具没给出某个进程的显存、或占用者是 Kubernetes 分给别的 Pod 的卡
 （这些占用以后会长到多大不得而知）；节点 agent 版本较旧——共用要求 agent 在平台实例上卡之后继续上报卡上原有的外部进程
 （平台的每个引擎在卡上只留一个进程，超出平台实例个数的进程都算外部的，包括对方换了 PID 重启或在旁边新起的作业；退出的进程照样连读 3 次空闲才放出显存），直到卡上的平台实例全部休眠或离开、卡重新被完整检查，并把这份记录存在 agent 状态目录里、重启后接着用，旧 agent 会在第一个实例上卡后丢掉它们，
@@ -1028,7 +1033,7 @@ runveil（udocker）节点拉取镜像时，agent 日志（`<state>/agent.log`�
 
 | 原因码 | 含义 |
 |---|---|
-| `no_fit` | 每卡启动固定需求 > 可用显存；参数含 `required_gib`、`available_gib`、`tp`、`gpu_memory_utilization`，卡与平台外进程共用时另带 `foreign_gib`（外部进程占用）与 `foreign_headroom_gib`（留出的余量） |
+| `no_fit` | 每卡启动固定需求 > 可用显存；参数含 `required_gib`、`available_gib`、`tp`、`gpu_memory_utilization`，卡与平台外进程共用时另带 `foreign_gib`（外部进程占用）与 `foreign_headroom_gib`（留出的余量；部署策略不留余量时不带，大小在「设置 › 节点与部署 › 部署」调整） |
 | `insufficient_empty_gpus` / `insufficient_shared_gpus` | 空闲整卡 / 可共享的卡不够 |
 | `pinned_gpus_unavailable` | 手动放置的 PD 实例钉住的卡被其他部署占着；参数给出 `node`、`gpus`（钉住的卡号）和 `holders`（占卡的部署）。实例不会改用同节点的其他空卡，而是等钉住的卡空出来：停掉或迁走占卡的部署，或把这个部署切成自动放置（`PUT /deployments/{id}/placement-mode`），由平台改用空闲的卡。钉住的卡被平台外进程占着、不健康或空着仍放不下时，仍是对应的原因码 |
 | `waiting_for_yield` | 副本在共卡的部署按出让策略让出卡后放得下，正在等它们让卡；参数给出 `node`、`holders`（占卡的部署，各带 `at_once`，或 `idle_sec` 与按时自动出让的 `max_serve_sec`：它按什么条件把卡让给这个部署）和 `instances`。占卡者睡下后自行解决，见[新部署怎样放到共用的卡上](scheduling-center.md#新部署怎样放到共用的卡上)；不自动出让的占卡者从不被要求让卡 |
@@ -1040,12 +1045,13 @@ runveil（udocker）节点拉取镜像时，agent 日志（`<state>/agent.log`�
 | `no_owned_gpu` | 节点没有归本机使用的卡：一张都没有，或全部直通给虚拟机、厂商驱动不可用、被其他驱动持有 |
 | `gpus_held_outside_platform` | 卡本身健康，但能用的（指定了卡时为指定的卡）都被平台外的进程占着，且这个部署不能与它们共用：整卡部署，或外部进程的显存未知，或节点 agent 较旧 |
 | `held_outside_platform_sleep` | 只有与平台外进程共用的卡能放这个带显存上限的部署，但它会休眠：这些进程还在时，它睡下后在这张卡上唤不醒。处理：关掉这个部署的休眠，或换一张卡 |
-| `held_outside_platform_not_allowed` | 能放这个带显存上限部署的卡上有平台外进程，而节点的放置策略不允许分区与它们共卡；参数 `setting`（开关的键）、`gpus`、`count`、`node`。节点上另有干净卡但忙或放不下时也报这个码。处理：在节点的放置策略里打开该开关，或手工选这张卡 |
+| `held_outside_platform_not_allowed` | 能放这个带显存上限部署的卡上有平台外进程，而这些卡没有启用调度，本部署也没有手工选它们；参数 `gpus`、`count`、`node`。节点上另有干净卡但忙或放不下时也报这个码。处理：在节点的 GPU 表里对这些卡启用调度，或手工选这张卡 |
 | `foreign_shared_gpus_used` | 方案说明（不是拒绝）：所选卡里有 `count` 张与平台外进程共用（外部占用最多 `foreign_gib` GiB），因为没有干净卡放得下 |
 | `tp_head_count_not_divisible` | TP 不能整除注意力头数 |
 | `sleep_residue_blocks_startup` | 休眠实例的残留显存挡住了启动 |
 | `engine_ports_exhausted` | 节点引擎端口区间用尽 |
 | `insufficient_disk` / `insufficient_runtime_disk` | 权重盘 / 运行时盘不足 |
+| `insufficient_managed_dir_disk` | 节点存放托管目录的磁盘放不下模板 `dirs` 声明的上限加磁盘保留空间（同盘时含权重与镜像）；参数给出需要、可用、目录、保留与路径，见[托管的可写目录](../reference/inference-catalog-spec.md#dirs托管的可写目录) |
 | `RUNTIME_UNAVAILABLE` / `serving_unavailable` | 节点没有容器运行时 / 没有可承担服务流量的网络 |
 | `image_source_forbidden` | 节点适用的拉取来源规则让镜像无处可拉（参数 `node`、`image`），见[镜像拉取失败](#镜像拉取失败) |
 | `partition_unavailable` | 需要 dGPU 后端但节点没有就绪的，见 dGPU 一节 |
@@ -1413,6 +1419,31 @@ server 停机错过的计划只补 12 小时内最新的一次。计划的 `next
 用户不存在时报 `not found`，先核对用户名和数据目录；出现权限错误时检查当前用户对该数据库的访问权限。
 见 [CLI](../reference/cli.md)。
 
+## server 卡住或偶发变慢时：卡顿报告与现场堆栈
+
+**现象**：请求偶尔要等几秒才返回，或一段时间内 server 日志一行都没有，事后看不出当时卡在哪里。
+
+**卡顿报告（自动）**：server 自己盯着会等磁盘的几处：日志写入（日志文件与 stderr）、数据库语句、事务的开始与提交以及等单写连接（排队和落盘都在这里；集群里包括到数据库进程的往返）、指标库、日志库和请求记录库的写入。其中一处等待超过 3 秒（`log.stall_report_after`）时，它立刻在内存里取下全部 goroutine 的堆栈，磁盘能写后存成文件，所以日志或磁盘本身卡住时也能留下现场：
+
+- 文件在 server 数据目录的 `diagnostics/stalls/stall-<UTC 时间>.txt`，保留最新 20 份；两份报告之间至少隔 1 分钟，期间的卡顿只计数，写在下一份报告里。
+- 报告开头是 server 版本、发现时间、当时在等的各处及已等时长（`waiting:`）、内核的 I/O 压力（`io pressure:`），随后是全部堆栈；等待持续到 30 秒时再取一次堆栈（`still waiting at`），结束时补一行 `ended: …, after <时长>`。没有 `ended` 行说明进程在卡顿结束前退出了。等待超过 40 倍阈值（默认 2 分钟）仍未返回时不再盯它，报告末尾写 `no longer watched: …, these waits never returned`，日志是 `process stall no longer watched: a wait never returned`：那个 goroutine 仍停在堆栈所示的位置。离上一份报告不足 1 分钟就开始的卡顿，如果持续到满 1 分钟仍未结束，会在那时取栈并写报告。
+- 卡顿结束后 server 日志有一行 `process stall recorded site=… duration=… report=…`。`process pause recorded` 表示整个进程在这段时间内没有被调度（被冻结、CPU 被抢占或内存回收），这种情况没有堆栈，文件名是 `stall-<时间>.pause.txt`；至少 1 秒才算。进程没被调度的时间不计入各处等待的时长，所以一次冻结不会再被记成一份卡顿报告。日志行里的 `report=` 只在报告文件确实写下时才有。
+- 日志写入不拖住请求：server 和 agent 的每条日志先进内存队列（文件和 stderr 各一条，各 4096 条、4 MiB），由各自的 goroutine 写出，所以磁盘卡住时日志晚到、报告里 `log output` 下停着的是写日志的 goroutine。队列满后新日志被丢弃，恢复后日志里有一行 `log records dropped: the output was not taking writes output=… dropped=… since=… for=…`。输出跟得上时（上一次写入不到 1 毫秒、前面排队不超过 4 条），`error` 及以上级别的日志等它写出后才返回，所以紧接在错误之后崩溃也不丢这条错误。这个等待全进程同一时刻只有一个，单次最多 20 毫秒，每秒合计不超过 40 毫秒；输出卡住或变慢后不再等，直到它有一次写入又快又把队列写空。没等的 `error` 日志和其他日志一样排队。进程被强杀或在其他 goroutine 上 panic 时，队列里还没写出的日志会丢失；正常停止、主动退出和收集诊断信息前最多等 3 秒把队列写完。
+- 看报告时先看 `waiting:` 确认卡在哪一类操作，再在堆栈里找停在该操作上的 goroutine，以及排在它后面等同一把锁的 goroutine。
+- [收集诊断信息](#无法登录现场时调试采集与收集诊断信息)会带上时间范围内的报告（`server/stalls/`）。
+
+agent 用同样的方式盯着自己写日志文件（`gpuworks-agent run --stall-report-after`，默认 3 秒，`0` 关闭），报告在 agent 状态目录的 `stalls/` 下（默认 `/opt/gpuworks/stalls/`）。agent 的报告不随诊断信息收集，需要时在节点上取；日志文件打不开、agent 只写 stderr 时不记录。
+
+**现场堆栈（按需）**：server 正卡着而没有报告时（例如卡在上面没有覆盖的地方），在 server 主机上取当前堆栈，不需要重启，也不会终止进程：
+
+```bash
+kill -USR1 "$(systemctl show -p MainPID --value gpuworks)"   # 打开仅回环的 pprof 监听，10 分钟后自动关闭
+grep 'pprof window open' /opt/gpuworks/server/data/logs/gpuworks-server.log | tail -n 1   # 实际地址，默认 127.0.0.1:6060
+curl -s 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=2' > goroutines.txt
+```
+
+不在 systemd 下运行时，把 PID 换成 server 进程自己的；信号只发给 server 进程，`--supervise` 的父进程收到 `USR1` 会退出。不要用 `kill -QUIT`：它会终止进程。
+
 ## 无法登录现场时：调试采集与收集诊断信息
 
 不能登录客户服务器时，让管理员在 **设置 → 诊断** 里操作，把下载的压缩包发回来。
@@ -1425,6 +1456,7 @@ server 停机错过的计划只补 12 小时内最新的一次。计划的 `next
 | `server/disk.json` | server 的数据、日志、备份目录与 SQLite 临时目录：所在文件系统的总量与剩余量，以及每个目录下各项的大小（从大到小） |
 | `server/host-identity.json` | server 所在机器的身份（系统 UUID、主板序列号、machine-id、根文件系统 UUID），每项只有加盐摘要 `h` 与原始值的最后 4 个字符 `tail`，读不到的项缺省；盐是固定的，同一台机器在每次收集里摘要相同，见[扩展点](../dev/extensions.md#管理-server-的主机身份) |
 | `server/gpuworks-server.log` | 时间范围内的 server 日志（含 info，日志页只有 warn 以上） |
+| `server/stalls/stall-<时间>.txt` | 时间范围内的[卡顿报告](#server-卡住或偶发变慢时卡顿报告与现场堆栈)，原样收入 |
 | `nodes/<uuid>/agent.log`、`doctor.json` | 所选节点（不选时为所选部署的实例所在节点）的 agent 日志与诊断报告 |
 | `instances/<uuid>.log` | 所选部署的实例日志 |
 | `debug/<会话>/`、`nodes/<uuid>/debug/` | 时间重叠的调试采集 |

@@ -3,6 +3,9 @@ package deployment
 import (
 	"context"
 
+	"gpuworks.ai/gpuworks/internal/server/inferenceapi"
+
+	"gpuworks.ai/gpuworks/internal/proto"
 	"gpuworks.ai/gpuworks/internal/server/api/dto"
 	"gpuworks.ai/gpuworks/internal/server/deploy"
 	"gpuworks.ai/gpuworks/internal/server/netplan"
@@ -63,11 +66,16 @@ func (s *Service) evaluateRanks(env evaluateRankEnv) bool {
 		resp.Warnings = append(resp.Warnings, computeFallbackWarning(group)...)
 	}
 	var draftInputs []deploy.ResolveLaunchInput
+	var peers []proto.PeerRank
+	if req.NNodes > 1 {
+		peers = planning.GroupPeers(rankNodes, group)
+	}
 	for rank, rankNode := range rankNodes {
 		modelMount, componentMounts := previewComponentMounts(s.d.Store, selection.Components, rankNode)
 		topology := planning.DistTopology{NNodes: req.NNodes, NodeRank: rank, Role: "standalone"}
 		if req.NNodes > 1 {
 			topology = planning.PreviewRankTopology(req.NNodes, rank, group.Ranks[rankNode.ID])
+			topology.Peers = peers
 		}
 		resolution := s.rankImage(eng.Name(), selection, req.Image, rankNode)
 		rankImage := resolution.Image
@@ -165,7 +173,7 @@ func (s *Service) evaluateRankFallback(env evaluateRankEnv) bool {
 		perNode, parallel.TP = 0, 0
 	}
 	params := deploy.Params{
-		ModelPath: modelMount, ServedName: servedName, APIPort: planning.PreviewAPIPort,
+		ModelPath: modelMount, ServedName: servedName, APIPort: planning.PreviewAPIPort, MetricsPort: planning.PreviewMetricsPort, MetricsPortSeparate: inferenceapi.SeparateMetricsPort(selection.APIContract),
 		AssignedGPUs: perNode, TensorParallel: parallel.TP, PipelineParallel: parallel.PP, Sleepable: req.Sleepable, PriorityScheduling: requestsPriorityScheduling(req), Quick: quick, TemplateArgs: templateArgs,
 		TemplateEnv: templateEnv, ExtraArgs: userExtraArgs,
 		Arch: arch, ArchID: archID, Vendor: vendor, ModelType: model.Arch,
@@ -178,6 +186,7 @@ func (s *Service) evaluateRankFallback(env evaluateRankEnv) bool {
 		RuntimeAssets: selection.Assets, ComponentMounts: componentMounts, APIContract: selection.APIContract,
 		PlacementVariables: placementVariables, AllowUnresolved: allowUnresolvedPlacement,
 		ModelWeightBytes: modelWeightBytes, TemplateShmBytes: selection.shmBytes(), TemplateMemlockUnlimited: selection.memlockUnlimited(), TemplateDockerArgs: selection.dockerArgs(),
+		TemplateDirs: selection.Dirs,
 	}, req.ContainerOverrides, selection.Components, modelMount)
 	if resolveErr != nil {
 		env.errs.add("", resolveErr)

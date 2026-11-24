@@ -11,7 +11,6 @@ import (
 
 	"gpuworks.ai/gpuworks/internal/accelerator"
 	serverestimate "gpuworks.ai/gpuworks/internal/server/estimate"
-	"gpuworks.ai/gpuworks/internal/server/nodepolicy"
 	"gpuworks.ai/gpuworks/internal/server/parallelism"
 	"gpuworks.ai/gpuworks/pkg/topoparse"
 )
@@ -32,7 +31,8 @@ type GPU struct {
 	NUMANode       int
 	// Schedulable is whether work may go on this card at all
 	// (store.GPU.CanTakeWork): this node's own, at a level that serves,
-	// and not held outside the platform.
+	// and not held outside the platform - or one an operator enabled
+	// scheduling on, whatever the platform judged.
 	Schedulable bool
 	// HeldOutsidePlatform marks a card a process outside the platform is
 	// using — one reason it is not Schedulable that is not a fault, and
@@ -50,9 +50,13 @@ type GPU struct {
 	SharedByMemory bool
 	// ForeignBytes is what processes outside the platform hold on the card,
 	// when the card is held and every holder's memory is known
-	// (store.GPU.ForeignBytes); zero otherwise. Available keeps it, and a
+	// (store.GPU.ForeignBytes); zero otherwise. Available keeps it, and the
 	// headroom beside it, out of what a partition may claim.
 	ForeignBytes int64
+	// ForeignHeadroomBytes is the memory left free beside ForeignBytes, by
+	// the operator's deployment policy (estimate.ForeignHeadroomBytes). The
+	// snapshot's builder states it; zero keeps nothing free.
+	ForeignHeadroomBytes int64
 	// ForeignShareable marks a held card that a memory-limited partition
 	// may still share by memory: healthy, not stopped by an operator, every
 	// holder's memory known, and an agent that keeps reporting the holders
@@ -155,16 +159,22 @@ type NodeSnapshot struct {
 	DtypeReason           string
 	DiskAvailBytes        int64
 	RuntimeDiskAvailBytes int64
+	// ManagedDirDiskAvailBytes is the free space of the disk the node keeps
+	// managed directories on; zero is unknown and checks nothing.
+	ManagedDirDiskAvailBytes int64
 	// ServingUnavailable marks a node with no network that may carry serving
 	// traffic: no serving network, and the management network may not.
 	ServingUnavailable bool
-	// Policy is the node's placement policy; the card gates ask it whether
-	// a card they would withhold may be used (cardGate.consented).
-	Policy NodePolicy
 }
 
-// NodePolicy is a node's placement policy (package nodepolicy).
-type NodePolicy = nodepolicy.Policy
+// Consent is what a placement request itself says about the cards: the zero
+// value lets the scheduler choose.
+type Consent struct {
+	// CardsChosen: an operator picked the cards (planning: the "gpus" key
+	// of a manual placement), which consents to sharing them with processes
+	// outside the platform.
+	CardsChosen bool
+}
 
 // Request describes what to place. Weight and multimodal bytes are the startup
 // requirements; KV cache is deliberately absent because engines allocate those
@@ -184,6 +194,11 @@ type Request struct {
 	ReserveBytes         int64
 	DiskNeedBytes        int64
 	RuntimeDiskNeedBytes int64
+	// ManagedDirNeedBytes is what the managed directories' disk must have
+	// free: the declared limits, the disk reserve, and the image and weights
+	// when they land on the same disk (planning works it out). Zero for a
+	// launch that declares no directories.
+	ManagedDirNeedBytes int64
 	// StorageRefusal is set when no storage the deployment may use can serve
 	// the node; planning works it out because the scheduler knows no storages.
 	StorageRefusal *Reason
@@ -208,10 +223,10 @@ type Request struct {
 	// its engine; a node whose vendor lacks one is filtered out.
 	Features []accelerator.Feature
 	// Consent is what the request itself says about the cards: an operator
-	// who chose them consents to sharing them (nodepolicy.Consent). The zero
-	// value is the scheduler choosing. AllowedGPUIndexes alone is not
-	// consent: the platform pins cards of its own.
-	Consent nodepolicy.Consent
+	// who chose them consents to sharing them. The zero value is the
+	// scheduler choosing. AllowedGPUIndexes alone is not consent: the
+	// platform pins cards of its own.
+	Consent Consent
 	// GPUMemUtil is the effective whole-GPU capacity fraction this deployment
 	// runs at. It is materialized from the launch configuration before the
 	// request is built, so there is no such thing as "not set": Validate
@@ -280,6 +295,16 @@ const (
 	// deployment's KV offload backend (ADR 0069).
 	ReasonKVBackendUnsupportedOnNode = "kv_backend_unsupported_on_node"
 	ReasonInsufficientRuntimeDisk    = "insufficient_runtime_disk"
+	// ReasonInsufficientManagedDirDisk: the disk the node keeps managed
+	// directories on cannot hold the template's declared directories on top
+	// of the disk reserve (and the image and weights when they share it).
+	ReasonInsufficientManagedDirDisk = "insufficient_managed_dir_disk"
+	// ReasonAgentCapabilityMissing: the launch uses a platform facility only
+	// the node's agent provides (a template's dirs, the peers file a template
+	// references), and the agent does not announce it (Params capability,
+	// node): it is older than the facility. Planning decides it from the
+	// resolved launch (planning.agentCapabilityRefusal).
+	ReasonAgentCapabilityMissing = "agent_capability_missing"
 	// No card takes work, and why, from the operator's side: the node has
 	// no card of its own (none at all, or all lent to virtual machines or
 	// held by another driver), its cards are held by processes outside the
@@ -292,8 +317,8 @@ const (
 	ReasonHeldOutsidePlatformSleep = "held_outside_platform_sleep"
 	// ReasonHeldOutsidePlatformNotAllowed: cards that could take the
 	// partition ({gpus}, {count} on {node}) are shared with processes
-	// outside the platform, and the node's placement policy does not allow
-	// partitions beside them; {setting} names the policy key that would.
+	// outside the platform, and no operator enabled scheduling on them or
+	// chose them for this deployment.
 	ReasonHeldOutsidePlatformNotAllowed = "held_outside_platform_not_allowed"
 	// ReasonForeignSharedGPUsUsed: the chosen group includes cards shared
 	// with processes outside the platform ({gpus}, {count}, up to

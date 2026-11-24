@@ -100,6 +100,9 @@ type Session struct {
 	// reaches it through hub.session() under the hub mutex, so that pairing is
 	// the happens-before edge and no extra lock is needed here.
 	caps []string
+	// managedDirGroups are the managed directory groups the agent's hello
+	// listed (proto.Hello.ManagedDirGroups); written and read like caps.
+	managedDirGroups []string
 
 	assetMu      sync.RWMutex
 	assetDigests map[string]struct{}
@@ -198,6 +201,7 @@ func (s *Session) handshake() error {
 	}
 	s.proto = negotiated
 	s.caps = hello.Caps
+	s.managedDirGroups = hello.ManagedDirGroups
 	s.rememberAssetDigests(hello.RuntimeAssetDigests)
 
 	if strings.TrimSpace(hello.NodeToken) == "" {
@@ -236,6 +240,11 @@ func (s *Session) handshake() error {
 			return err
 		}
 		return errSmokeHandshake
+	}
+	if s.hub.sessionReplaced(n.UUID, s.sessionID) {
+		// A relay brings back a session another connection replaced.
+		_ = s.send(proto.TReject, 0, proto.Reject{Reason: proto.RejectStaleSession, Detail: "another connection took this node"})
+		return &handshakeRejectError{reason: proto.RejectStaleSession, err: errors.New("relayed session was replaced")}
 	}
 	// A diagnostic handshake must preserve an earlier upgrade failure. Only a
 	// formal connection running this version can clear that observation.

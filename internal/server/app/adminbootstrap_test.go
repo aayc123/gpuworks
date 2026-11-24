@@ -119,6 +119,11 @@ func TestAdminBootstrapLogSilentOnSecondStart(t *testing.T) {
 	if strings.Contains(first.String(), "password=") {
 		t.Fatal("first start exposed the generated password in the log")
 	}
+	// A second start follows a stopped server; a clustered database refuses
+	// a second owner while the first still holds it.
+	if err := firstApp.Close(); err != nil {
+		t.Fatalf("stop the first start: %v", err)
+	}
 
 	var second strings.Builder
 	secondApp, err := New(cfg, slog.New(slog.NewTextHandler(&second, nil)))
@@ -126,6 +131,14 @@ func TestAdminBootstrapLogSilentOnSecondStart(t *testing.T) {
 		t.Fatalf("second start: %v", err)
 	}
 	t.Cleanup(func() { secondApp.proxy.Close() })
+	// The app is never run, so nothing else stops it: in the clustered build
+	// its database process would keep writing into the temporary directory
+	// while the test removes it.
+	t.Cleanup(func() {
+		if err := secondApp.Close(); err != nil {
+			t.Errorf("app.Close: %v", err)
+		}
+	})
 	if strings.Contains(second.String(), "created admin user") {
 		t.Errorf("second start reported creating the admin user again:\n%s", second.String())
 	}

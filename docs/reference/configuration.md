@@ -56,6 +56,7 @@ usage_report: false        # 不发日报，自动检查不带节点数/GPU型�
 | `data_dir` | `./data` | 数据库、master.key、指标与日志库、推理目录包等 | `--data`（数据库路径另可 `--db`） |
 | `log.file` / `max_size` / `keep` | `<data>/logs/gpuworks-server.log`、10MB、20 | 服务自身日志的文件与轮转（`max_size` 用 KB/MB/GB，1024 进制）；留空的项取默认值 | `--log-file`、`--log-max-size`、`--log-keep` |
 | `log.level` | info | 日志级别：`debug` / `info` / `warn` / `error`，其他值按 info | `--log-level` |
+| `log.stall_report_after` | 3s | 一次日志写入或存储操作等待超过这个时长时，把全部 goroutine 的堆栈记为卡顿报告（`<data>/diagnostics/stalls/`）；`0` 关闭，见[排障](../how-to/troubleshooting.md#server-卡住或偶发变慢时卡顿报告与现场堆栈) | `--stall-report-after` |
 | `trusted_proxies` | 空（install 写入 `127.0.0.1/32, ::1/128`） | 允许提供 `X-Forwarded-For` / `-Host` / `-Proto` / `-Port` 的代理；公网入口（`gpuworks expose`）启用期间另外信任来自本机的连接，不必列出（[ADR 0049](../adr/0049-expose-trusts-same-host-connector.md)） | `--trusted-proxies` |
 | `tls_cert_file` / `tls_key_file` | 空 | 原生 HTTPS 的 PEM 证书链和私钥路径，必须同时设置。非维护监听使用 TLS 1.2 以上；要求显式监听 IP，不支持通配地址。本机 `127.0.0.1` / `::1` 维护入口保留 HTTP，见[生产部署](../how-to/deploy-production.md#原生-https) | — |
 | `outbound_restrict_private_hosts` | `false` | 管理节点 HTTP 出站的私网严格模式；默认关闭，普通私网及本机回环无需白名单。设为 `true` 后，仅允许 `outbound_allow_private_hosts` 授权的私网目标。保存后下一次请求生效；特殊元数据、链路本地和保留地址始终拒绝 | — |
@@ -329,8 +330,12 @@ server 同时请求三个源的签名索引
 | `start_timeout_sec` | 1800 | 60–86400 | 启动等待上限的第一步（来源 `cluster`）：模板档位的 `start_timeout_sec` 代替它，已知引擎等待上限可向上扩展（最多 86400 秒），部署自己的值取代全部，见[启动等待上限](deployment-launch-sources.md#启动等待上限)。超时判这次启动失败并按重试规则重建。设置页「部署」卡片编辑它；单个部署可用 `start_timeout_sec` 另设（部署表单「运行环境」的「启动超时」） |
 | `event_retention_days` | 180 | 1–3650 | 事件时间线保留天数 |
 | `event_retention_bytes` | 50 GiB | 64 MiB–1 TiB | 事件时间线保留字节数，与天数先到者为准 |
+| `foreign_headroom_pct` | 5 | 0–50 | 与平台外进程共用的卡上，在它们的占用之外不分配的显存占卡显存的百分比 |
+| `foreign_headroom_min_bytes` | 4 GiB | 0–64 GiB | 上述余量的最小值；余量取比例与最小值中较大的一个 |
 
 server 启动时以及之后每 6 小时按这两个上限清理一次事件，最旧的先删，分小批删除，删完一批就让出数据库写入，不会长时间挡住其他写入；只删到满足上限为止。server 停止时清理在两批之间停下，剩下的由下一次清理接着删。字节数按事件文本（消息、参数、事件码）的字符数估算，中文等多字节字符按一个字符计，所以实际占用可能比设定值大。
+
+平台外进程的显存是每分钟一次的读数，不是它们遵守的上限；余量在它们增长时避免它们和同卡实例显存不足。两个键都设为 0 即不留余量，只在这些进程显存固定（例如启动时一次占满显存的推理引擎）时使用。修改立即作用于之后的放置、原地改配额和 GPU 列表的可分配显存，已在运行的实例不受影响。控制台入口在「设置 › 节点与部署 › 部署」。
 
 旧版本存下的值缺少新键时按出厂值读取；存储的值无法解析或越界时整体回退到出厂值。
 
@@ -344,6 +349,7 @@ server 启动时以及之后每 6 小时按这两个上限清理一次事件，�
 |---|---|---|---|
 | `GPUWORKS_ADMIN_PASSWORD` | 无 | 首次创建 admin 账户时的初始密码；`gpuworks install` 也按 `--password` > 该变量 > 交互 > 随机 的顺序使用它。只在创建账户时读取 | `gpuworks serve`、`gpuworks install` |
 | `GPUWORKS_ADDR`、`GPUWORKS_DATA_DIR`、`GPUWORKS_TRUSTED_PROXIES` | 无 | 仅为 `server.yaml` 之前的老单元保留：命令行与 `server.yaml` 都没提供对应值时才生效，`install` 接管后不再使用 | `gpuworks serve` |
+| `GPUWORKS_DQLITE_BIN` | server 可执行文件旁边的 `gpuworks-dqlite` | 只在带 `dqlite` 标签的 Linux 构建里读取：数据库辅助程序的路径。集群安装把辅助程序放在 server 旁边，不需要设置。集群的存储档位不是环境变量或 `server.yaml` 的键：它在安装时确定并记录在成员的 `cluster-enrollment/config.json` 里，见[存储档位](../explanation/control-plane-cluster.md#存储档位) | [控制面集群的行为与边界](../explanation/control-plane-cluster.md) |
 
 ### Agent 环境变量
 
@@ -384,6 +390,7 @@ udocker-bundle 对应的变量，只在需要临时覆盖文件中的值时使�
 | `DOCKER_HOST`、`DOCKER_CONTEXT` | docker 驱动只接受本机 unix socket：`DOCKER_HOST` 不是 `unix://` 或 `DOCKER_CONTEXT` 不是 `default` 时，docker 驱动判为不可用，因为 bind mount 和加速卡设备会落到远端机器上 | 运行时自动探测 |
 | `ASCEND_HOME_PATH` | 探测昇腾 CANN 版本时优先查找其下的 `version.info` | agent GPU 探测 |
 | `HF_TOKEN` | 读取受限（gated）的 HuggingFace 仓库 | `gpuworks-catalog-model-config` |
+| `GOMAXPROCS` | Go 运行时同时运行 Go 代码的线程数。server 在没有设置它时把默认值限制在 32：在逻辑核很多、跨多个 NUMA 节点的机器上，用满全部核会让网关高负载时每请求 CPU 多出 2.5–3.5 倍而吞吐不变；按规模目标同时承受网关、机群重部署与 server 发起评测时，server 约用 15 个核。核数本来不超过 32、或容器 CPU 限额更低的机器不受影响。设置这个变量则按设置的值运行，启动日志会写明被限制前后的值 | `gpuworks serve` |
 | `INVOCATION_ID` | systemd 给单元进程设置；server 据此判断自己被 `Restart=always` 监督，允许控制台「立即重启」 | `gpuworks serve` |
 | `LC_ALL`、`LC_CTYPE`、`LANG` | 判断 locale 是否 UTF-8，决定 `install` 打印块状还是纯 ASCII banner | `gpuworks install` |
 | `GPUWORKS_API_KEY`、`GPUWORKS_URL`、`GPUWORKS_WS_URL` | 只出现在界面生成的 curl/Python 示例里，由用户在自己的 shell 中设置，程序本身不读取 | 推理示例片段 |

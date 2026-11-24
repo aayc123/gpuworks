@@ -206,12 +206,17 @@ func NewWithProber(driver runtime.Driver, report Reporter, log *slog.Logger, sta
 // A failed Remove leaves the container rootfs behind and, on udocker, leaves the
 // proot process tree holding the GPU while the control plane has already
 // forgotten the deployment, so it must reach the control plane rather than only
-// the agent log: the instance is reported as failed instead of stopped, and the
-// deployment delete path can retry the removal it is waiting on.
+// the agent log: the instance is reported as removing with the driver's coded
+// reason instead of stopped, and the deployment delete path can retry the
+// removal it is waiting on.
 func (e *Engine) teardown(ctx context.Context, uuid string) bool {
 	if err := e.reclaimInstance(ctx, uuid); err != nil {
 		e.log.Error("instance teardown pending; resources may still be held", "uuid", uuid, "err", err)
-		e.report(proto.InstanceStatus{UUID: uuid, State: proto.InstRemoving, Message: "teardown pending: " + err.Error()})
+		e.reportCleanupPending(uuid, proto.RuntimeFailure{
+			Code:     runtime.TeardownFailureCode(err),
+			Resource: containerName(uuid),
+			Detail:   err.Error(),
+		}, "teardown pending: "+err.Error(), nil)
 		return false
 	}
 	e.report(proto.InstanceStatus{UUID: uuid, State: proto.InstStopped})
@@ -233,6 +238,9 @@ func (e *Engine) reclaimInstance(ctx context.Context, uuid string) error {
 	}
 	if err := os.RemoveAll(e.preStartDir(uuid)); err != nil {
 		return fmt.Errorf("remove pre-start state: %w", err)
+	}
+	if err := os.RemoveAll(e.peersDir(uuid)); err != nil {
+		return fmt.Errorf("remove peers file: %w", err)
 	}
 	return nil
 }
@@ -282,7 +290,7 @@ func (e *Engine) removeContainer(ctx context.Context, uuid string) error {
 
 const (
 	maxPreStartScriptBytes = 64 << 10
-	preStartMountPath      = "/gpuworks/pre-start.sh"
+	preStartMountPath      = proto.PlatformFileDir + "/pre-start.sh"
 )
 
 func (e *Engine) preStartDir(uuid string) string {

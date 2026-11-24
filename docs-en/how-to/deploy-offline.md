@@ -51,7 +51,17 @@ Directories downloaded by `huggingface-cli` contain `.cache/huggingface/`. Keep 
 
 Copy the files directly to one compute node if possible:
 
-**Images**: After copying the archive to the node, import it into the node's container runtime:
+**Images**: After copying the archive to the node, open the corresponding image series and version on the Images page, then open “Node Distribution.” In the target node's “Acquisition Method,” select “Import from node file…”. Enter the absolute path of the tar file on that node, start the import, and wait for the status to become “Present.” The original archive is kept. Directories, paths on the management server, and archives unsupported by the node's runtime fail with an error. Both the server and the target agent must support this feature.
+
+For Kubernetes nodes, enter the file path on the worker host, such as `/data/runner.tar`. Both the file check and the load run in the host environment; the file does not need to be placed inside the Agent Pod or the shared state directory. The image is loaded into containerd's `k8s.io` namespace used by kubelet.
+
+An administrator can expand a present node in Node Distribution, select **Replace from node file**, enter the new archive’s absolute path, and confirm. You can enter a new target tag when all reported tags resolve to the same image ID. If the archive contains different images, choose an existing tag. A transfer already active for that image on the node continues.
+
+For a new image, open **Custom → Add Custom Image** with **Load from a compute node file** selected by default. Select the online node that holds the archive and enter its absolute path. Click **Resolve** next to the path to read the tagged image reference from the archive on that node. The form also fills in the inference engine, engine version, framework, framework version, and host architecture when the image configuration declares them. Fill in any missing fields. Select a reference if there are several, or enter one manually if there are no tags. For a Docker archive containing a single untagged image, the node tags the image ID returned by this load with the reference you entered. Choosing **Replace from node file** moves the existing tag to the newly loaded image. The node verifies the ID before reporting **Present**. For an uncompressed tar, the node skips the image layers to reach the metadata. A gzip tar is read sequentially. If the one-minute preview times out, enter the reference manually. Confirm the reference, engine, framework, and framework version, then submit. The console registers the image and opens its **Node distribution** tab. If the catalog already records the image as present on that node, the console tells you the node already has it. Choose **Replace from node file** to overwrite it. Otherwise, follow the load progress in the tab. The path applies only to this import. If loading fails, you can retry from the registered version’s node distribution.
+
+While a transfer for an image version and target node is active, concurrent node-file imports, URL imports, automatic pulls, or peer copies do not start duplicate transfers. You can submit a new request after cancellation; a late failure from an older attempt cannot overwrite the new one.
+
+Alternatively, log in to the node and import the archive into its container runtime:
 
 ```bash
 # Docker nodes
@@ -120,7 +130,7 @@ Before starting, confirm that the server can read the archive. Ordinary private 
    cd /data/offline-images && python3 -m http.server 8090
    ```
 
-2. Open the image on the Images page. In the node table row for the target node, select “Import from a URL…” under “Acquisition Method” and enter
+2. Open the image on the Images page. In the node table row for the target node, select “Import from an HTTP directory…” under “Acquisition Method” and enter
    `http://127.0.0.1:8090/<filename>` → click “Resolve” → check the image reference in the archive → select “Relay through the management server” → click “Pull.”
 
 The server streams the download to the node without saving it to disk. Relay transfers cannot resume; an interrupted transfer starts again from the beginning. For images of tens of GB over unreliable links, prefer copying to the node and importing locally.
@@ -193,7 +203,26 @@ Configuring offline sources does not disconnect the operating system from the ne
 - Model directories or image archives already hosted on a private HTTP file server: [Import Models and Images from an HTTP File Server](import-from-http.md)
 - Downloads, caching, and how “already present locally” is determined: [Download, Cache, and Sync Models Between Nodes](download-and-sync-models.md)
 
-<!-- translation-source-sha256: db7b5e72843d401af6b1edfd57fe988585405046991aee3ecda01551361f22fd -->
+<!-- translation-source-sha256: 7919d685c05ac862a992259f34d8a875a1ec110abb944791eaabf349d4f276c7 # Deploy in an Offline Environment -->
+<!-- translation-source-sha256: a239010cf7d775f6e9b9ac961c6b83b0b614e123c86830f48c435e52f676cf53 ## Recommended Workflow -->
+<!-- translation-source-sha256: b73a6b1917b36b6ac1f3667bab82f7fb64e922cb53a346e618e78743234a2546 ### 1. Install the Control Plane Node -->
+<!-- translation-source-sha256: 479cebd2adf6224f7b3ef765f14f5c36e50e01ec8142e85e196bea49078b19c0 ### 2. Add Compute Nodes -->
+<!-- translation-source-sha256: d5a507dc03a999b52b01f6a0f5e67d339550bc4e740e6c33c044e58e0567a7a0 ### 3. Download Images on the Online Machine -->
+<!-- translation-source-sha256: f5911ccb32c4812b04dce043ce7a574f4831e5dc771f26458f47a49fbb5dca82 ### 4. Download Models on the Online Machine -->
+<!-- translation-source-sha256: d7d3d84d8c933a317b764a53f33430992757b50c1b9aee36e4a0e63a6e2f58ac ### 5. Import Images and Models -->
+<!-- translation-source-sha256: a99d6cc4a2377156c262eb7133b43c5a6e04ab8e4d1161c8f328a229e6dc240a ### 6. Deploy and Verify -->
+<!-- translation-source-sha256: ffff45d50019870668450a1fbbc2a8a11bb2c93e6bef48feb5268da6f34fdfbc ## Special Cases -->
+<!-- translation-source-sha256: 24fe2bb1fa6636955140d33d56ff60c68948d9df3f9737800a278ce792b81bec ### Store Models on NFS -->
+<!-- translation-source-sha256: 1b90763075bd7d71d68f40040f66f17faada339096386b4d1535817ba22c32d4 ### Export Images with Docker -->
+<!-- translation-source-sha256: 71a2348752be498cb92304d8a21b732d304dd933bed416d7e3e7b932bc984a59 ### Import Images Through the Control Plane Node -->
+<!-- translation-source-sha256: 01c2500d06faeca3f771e63b3c6d219a45a3970c388302c1c419ceb3798f6497 ### Use a Private Registry -->
+<!-- translation-source-sha256: cfc41378f115c732b9e67007f3b56c6af9a83e5d12b84b399e6a59ae976fc753 ### Agent Image for Kubernetes Clusters -->
+<!-- translation-source-sha256: 5a0156a93daf2f305c4f30d02801b85d638ef8e72de98fef0c84c9b4cf9b8510 ### Store Models in a Private HTTP Directory -->
+<!-- translation-source-sha256: 0cd309cbfe4a33a2dd395170ea964de04c682be0f2a9567d291f3c7cbc706569 ### Nodes Cannot Access the Public Internet -->
+<!-- translation-source-sha256: 2b52ee21896a93065c94e0d039ec0f784fb9abc4ba4a9d37c828086bfd5e0aa9 ### Immediately Report Why an Image or Model Is Missing -->
+<!-- translation-source-sha256: 2d57ae06d23397d5f630e7f3f2d71c8517af8866e0be11b8c8b3460daba23b29 ### Update the Image Catalog and Inference Templates -->
+<!-- translation-source-sha256: a3a925dcbbad8133b709314d36a4cc3ba4a8464bfa8cd5a3e7664bc959ffb4d4 ## Offline Boundaries -->
+<!-- translation-source-sha256: 98465786e340902f4386309b8d140a002538e2be6f7cd40ac285d8992d70a38d ## Related Guides -->
 <!-- translation-localized-code-block: c717c0459f55443287bf882bfa1df2c29a02f63e677ed105a6b9f0cfa648769b fb1f692b5059c1a518bf7610bc04b414fbac8c14c412eb611037ff1567010f7c Translate Chinese code comments, preserving executable statements, parameter values, and paths. -->
 <!-- translation-localized-code-block: 02989a499c64fa46ffdb61c1d644c92435ac76da6d226fe734a210745b3e8a0a 0f5116535f0bd45f3e3eff27d33b8cf064e261a7dab15ef84c529acd212a8ccf Translate Chinese code comments, preserving executable statements, parameter values, and paths. -->
 <!-- translation-localized-code-block: e0baf1bbf17d7510b11d7a5aa8e9e820fbea43761101fa63db5b2afc691e9ac2 053400b1c9f5dbf83f869d2d57b5498e3a982ac5ffa9457381f740b0c01dd791 Translate Chinese code comments, preserving executable statements, parameter values, and paths. -->

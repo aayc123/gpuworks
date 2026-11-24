@@ -94,6 +94,8 @@
 - `featuregate`：功能可用性的叶子包（只依赖 `messages`）：功能键、四种可用性（完整、只读、锁定、隐藏）与预先构造的拒绝；扩展路由与控制台清单经它询问扩展模块提供的功能来源，社区路径从不查询。
 - `holdpass`：扩展模块请求的调度保持重新应用（`Host.ReapplySchedulingHolds`）：合并请求，两次全表写事务之间有下限间隔，失败退避重试；只依赖标准库，由 app 接进 `services()` 循环。
 - `selfinstall` / `installcred`：`gpuworks install` / `upgrade` 的实现（复制二进制、写 service 定义、从发布通道或发布站拉发布件、带备份可回滚）、控制台升级的启动守卫、无 systemd 时的 `serve --supervise` 守护循环，与首启 bootstrap admin 凭据记录（叶子包，install 与 server 两端共用，不得反向依赖 server）。
+- `cluster`（+`cluster/identity`）：控制面集群的数据库成员。启动并监管 `gpuworks-dqlite` 子进程（父进程退出时子进程随之退出；辅助程序不在本仓库构建，就绪声明里的协议版本须等于 `HelperProtocolVersion`），经 go-dqlite 的纯 Go client/driver 提供应用与本地调度两个 SQL 池、写入者准入、法定人数证明与快照、成员探测；`identity` 是成员证书、传输策略（允许与吊销的成员密钥）及其 TLS 校验。集群文件在 `linux && dqlite` 下构建，其余平台是返回不可用的桩。
+- `enrollment`：成员加入用的注册协议客户端与目录、成员关系的线上类型。成员生命周期（关闭态成员、业务代际、材料复制与证明、业务门）在 `app` 的 `dqlite` 标签文件里；成员侧命令与三成员安装器在 `cli`。
 - `distribution`：发布通道客户端（ADR 0040）：签名信封与索引 schema、同时请求所有发布源取第一个验签通过的索引、文件按 sha256 校验并换源续传；发布方通知 `notices.json` 的 schema、校验、本地匹配与拉取（`notices.go`，ADR 0054）；默认源与信任公钥是包内常量。只依赖标准库（`check-architecture` 守护），selfinstall 与 api 共用。
 - `diagnostics`：远程排查。调试采集（server 与所选节点的 debug 会话、所选部署请求原文的记录，一次一个、按时长与大小自动结束）与诊断信息收集（时间范围内的日志、调试采集文件、节点诊断与脱敏的数据库快照打包下载）；数据源由 `app/diagnostics_sources.go` 提供，`gpuworks support-bundle` 走同一套收集。
 - `hostidentity`：管理 server 所在机器的身份事实（系统 UUID、主板序列号、machine-id、根文件系统 UUID）：直接读取，root 才能读的两项由 systemd 以 root 运行的 `gpuworks host-identity` 写进 `/run/gpuworks/host-identity.json` 补齐（安全写入也在这里）；`app.Host.HostIdentity`、插件的 `POST /host/v1/host-identity` 与诊断信息收集读它，原始值不出 server。
@@ -154,6 +156,7 @@
 - `proto`（控制面协议）、
 - `engines`（引擎名唯一产地，纯叶子无依赖：`VLLM`/`SGLang`/`Callable`，`Callable` 承载目录自带的 Serve Adapter、无日志方言与参数字典，需要方言/字典时用 `DialectNames()` 而非 `Names()`；`deploy` 再导出为 `EngineVLLM`/`EngineSGLang`/`DefaultEngine`，因为 `modelmeta` 经 `inferenceapi` 被 `deploy` 依赖、agent 又不能依赖 server，两侧只能共用这个叶子包）、
 - `logging`（server+agent 共用的按大小轮转文件日志，`--log-file`/`--log-max-size`/`--log-keep`）、
+- `stallwatch`（server+agent 共用的卡顿记录：日志写入或存储操作等待过久时取下全部 goroutine 堆栈写成报告，无本仓库依赖）、
 - `logthrottle`（server+agent 共用的相同日志限频：同一类记录每 30 秒限量写入，其余计数后补一条汇总）、
 - `logtext`（server+agent 共用的容器输出切行：按终端语义只保留一行中最后一个 `\r` 之后的内容，进度条重绘只剩最终一帧；超长行截断而不让日志流因 `ErrTooLong` 中断）、
 - `debuglog`（限时限量的调试会话：会话期间把 debug 及以上的记录另写一个文件，进程本身的日志级别不变）、

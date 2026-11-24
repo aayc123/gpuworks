@@ -117,7 +117,8 @@ models:                       # FlatCatalog: a single top-level models list
 | `shm_bytes` | Optional integer in bytes; > 0 and ≤ 16 TiB (`1<<44`), otherwise returns the stable error code `CATALOG_SHM_BYTES_INVALID`; an explicit `0` is equivalent to omission | The container `/dev/shm` size required by the engine itself, for example, an engine that stores large lookup tables in shared memory. If the deployment does not specify a shared memory size, the container receives the larger of this value and “engine baseline + CPU memory tier”; an explicit deployment value takes precedence. See [Container `/dev/shm` Size](deployment-launch-sources.md#devshm-大小) |
 | `memlock_unlimited` | Optional Boolean, default `false`; non-Boolean values (numbers, strings, and so on) are rejected | When `true`, the deployment's container uses `--ulimit memlock=-1:-1` (removing the locked-memory limit only for this container), for engines that lock large amounts of host memory into RAM (for example, DeepInfer uses `cudaHostRegister` to lock about 197 GB). If the deployment's own `docker_args` already specifies `memlock`, that setting takes precedence and no duplicate is appended; this is merged with the `memlock` injected for host RDMA networking into a single entry. See [Locked Memory](deployment-launch-sources.md#锁定内存memlock) |
 | `start_timeout_sec` | Optional integer, seconds; 60–86400 (the same bounds as the deployment's own `start_timeout_sec`), otherwise the stable error code `CATALOG_START_TIMEOUT_INVALID` is reported; an explicit `0` is equivalent to omitting it | Startup health check budget for instances of this spec, for recipes whose first start converts weights or warms caches for tens of minutes. It is the template step of the startup wait limit (source `template`): cluster default → template → raised to the engine deadline → the deployment's `start_timeout_sec`; for the order and rules see [Startup Wait Limit](deployment-launch-sources.md#启动等待上限). Saved with the spec snapshot, so later template changes do not affect existing deployments |
-| `docker_args` | Optional string array; each item nonempty after trimming; validated exactly like the deployment's own `container_overrides.docker_args` (`deploy.ValidateDockerArgs`): options that hand the container the host (`--privileged`, `--pid`, `-v /`, and so on) are rejected, as are options the platform already manages (`--name`, `--network`, `--gpus`, `--shm-size`, `-e`, `-v`, `--mount`, `--entrypoint`, and so on); `--ipc=host` together with this same spec's own `shm_bytes` is also rejected | Extra `docker run` options the engine needs (for example `--cap-add=SYS_PTRACE`), the template layer of the deployment's own `docker_args`: the template's own args apply first, then the deployment's own, then the platform's (RDMA, memlock). If the deployment itself does not state `--ipc=host` but the selected template does, the deployment's own `shm_bytes` is rejected rather than silently having no effect, because it would never apply. See [the three-layer order of docker run arguments](deployment-launch-sources.md#docker-run-参数的三层顺序) |
+| `docker_args` | Optional string array; each item nonempty after trimming; validated exactly like the deployment's own `container_overrides.docker_args` (`deploy.ValidateDockerArgs`): options the platform already manages (`--name`, `--network`, `--gpus`, `--shm-size`, `-e`, `-v`, `--mount`, `--entrypoint`, and so on) are rejected; `--ipc=host` together with this same spec's own `shm_bytes` is also rejected; `--privileged` and `--pid` are allowed, and the deployment evaluation warns about them | Extra `docker run` options the engine needs (for example `--cap-add=SYS_PTRACE`), the template layer of the deployment's own `docker_args`: the template's own args apply first, then the deployment's own, then the platform's (RDMA, memlock). If the deployment itself does not state `--ipc=host` but the selected template does, the deployment's own `shm_bytes` is rejected rather than silently having no effect, because it would never apply. See [the three-layer order of docker run arguments](deployment-launch-sources.md#docker-run-参数的三层顺序) |
+| `dirs[]` | Optional, at most 8 entries; `name` is 1–32 lower-case letters, digits or `-` (not starting or ending with `-`), unique within the spec; `mount_path` is an absolute, clean container path other than `/` that overlaps no other container path of the spec ([one container path space](#模板与平台的分工)); `limit_bytes` is a byte count, > 0 and ≤ 64 TiB (`1<<46`); `retain` may only be `deployment`, written back on import when omitted | Writable host directories the platform keeps for the deployment on every node it runs on; see [dirs: Managed Writable Directories](#dirs-managed-writable-directories) |
 | `gpus` | Required | See below |
 | `args` | String array | Included in the engine command line; supports `${VAR}` [variable expansion](#变量展开); split using the parameter dictionary at deployment time (see below) |
 | `env` | Nonempty keys | Container environment variables; values support `${VAR}` expansion |
@@ -184,6 +185,28 @@ sources:
 ```
 
 `subfolder` selects one subtree of the repository by directory prefix, and the download keeps the repository-relative paths. When no directory has that name, it can name a single file in the repository and only that file is downloaded (for example, one adapter from a repository that keeps many LoRA files at its root); when a directory and a file share the name, the directory is selected.
+
+#### Rank-scoped weights
+
+When a multi-node recipe pre-splits its weights into one part per rank, kept in subfolders of one repository, the spec's own `weights.sources` may name the rank variable `${GPUWORKS_NODE_RANK}` in `subfolder` (as in template fields, the older unprefixed `${NODE_RANK}` is its alias):
+
+```yaml
+weight_bytes: 137438953472          # one rank's size
+weights:
+  quantization: fp8
+  sources:
+  - modelscope:
+      repo_id: org/model-tp4
+      subfolder: rank${GPUWORKS_NODE_RANK}   # rank 0 reads rank0/, rank 3 reads rank3/
+```
+
+Each rank of a multi-node deployment then downloads and mounts only its own part (decision in [ADR 0076](../adr/0076-rank-scoped-weights.md)):
+
+- At create, the subfolder is expanded for every rank into one model artifact per rank (same provider, repository and revision, own subfolder). Rank 0's artifact is the deployment's model; the other ranks' bindings are kept in the deployment snapshot and never resolved from the catalog again.
+- Each node's download task, model marker and local model identity are its rank's subfolder. Admission, disk budgeting and preparation progress are per rank too: rank `r`'s node reserves disk only for rank `r`'s artifact, and a node that already holds that subfolder counts no download.
+- The mount keeps the repository-relative paths: in rank `r`'s container the weights are under `${GPUWORKS_MODEL_PATH}/rank<r>/…`, so the command writes `${GPUWORKS_MODEL_PATH}/rank${GPUWORKS_NODE_RANK}/…`.
+- `weight_bytes` (and `runtime_weight_bytes`) state one rank's size; the memory estimate multiplies it back to the group's weights.
+- A subfolder may name only the rank variable; either every source of the spec names it or none does; it cannot be combined with `components` or `pd_mode`, nor deployed as PD (`RANK_WEIGHTS_PD_UNSUPPORTED`). A request that names `model_id` must name rank 0's artifact (`RANK_WEIGHTS_MODEL_NOT_RANK_ZERO`). On a single-node deployment `${GPUWORKS_NODE_RANK}` is `0` (as the variable table states), so it reads rank 0's part only; how many parts exist is the recipe's to decide, and the platform does not check the deployment's node count against it.
 
 Multiple sources in the same spec mean that any one can be pulled. The deployment's `model_source.provider` selects which provider's weights to run; [pull settings](../how-to/configure-pull-settings.md) determine how the node obtains them (already present, copied within a sync group, read from shared storage, or downloaded).
 
@@ -329,22 +352,25 @@ A template declares only what it needs, and the platform provides it on every la
 
 | Kind | The template writes | The container sees | Host side decided by | Lifetime |
 |---|---|---|---|---|
-| Launch variables | References to `${GPUWORKS_*}` in `args` / `env` / `entrypoint` / `pre_start_*`; see [Variable Expansion](#变量展开) | This launch's values | The platform | Every launch |
-| System-layer environment variables | Nothing; a key of the same name in `env` overrides it | The compute network's `NCCL_*` / `GLOO_SOCKET_IFNAME` / `UCX_NET_DEVICES`; see [Environment Variable Layers](deployment-launch-sources.md#环境变量分层) | The platform | Every launch |
-| Primary weights | `weights` | Read-only at `${GPUWORKS_MODEL_PATH}` (default `/model`, or the primary component's `mount_path`) | The platform (model storage) | With the model |
+| Launch variables | References to `${GPUWORKS_*}` in `args` / `env` / `entrypoint` / `pre_start_*` (a multi-node rank's `${GPUWORKS_PEERS_FILE}` among them), see [Variable Expansion](#变量展开); a weight `subfolder` may reference only `${GPUWORKS_NODE_RANK}` | This launch's values | The platform | Every launch |
+| Metrics port | `api.metrics.port: separate`, and a reference to `${GPUWORKS_METRICS_PORT}` in the launch fields, see [api.metrics](#apimetrics引擎指标映射) | The local port the launcher listens on (`${GPUWORKS_METRICS_PORT}`); the template does not choose the number | The platform (reserved together with the API port) | Fixed when the instance is created, kept with the instance |
+| System-layer environment variables | Nothing; a key of the same name in `env` overrides it | The compute network's `NCCL_*` / `GLOO_SOCKET_IFNAME` / `UCX_NET_DEVICES`, see [Environment Variable Layers](deployment-launch-sources.md#环境变量分层); a multi-node rank with a peers file also gets `GPUWORKS_PEERS_FILE` (the same value as the launch variable, for programs the recipe starts to read directly) | The platform | Every launch |
+| Primary weights | `weights`; `subfolder` may say `rank${GPUWORKS_NODE_RANK}`, see [Rank-Scoped Weights](#按-rank-拆分的权重) | Read-only at `${GPUWORKS_MODEL_PATH}` (default `/model`, or the primary component's `mount_path`); with rank-scoped weights each rank holds only its own subfolder | The platform (model storage) | With the model |
 | Component weights | `components[].mount_path` | Read-only at that path | The platform (model storage) | With the model |
 | Assets | `assets[].unpack_to` | Read-only, unpacked to that path | The platform (template package) | With the template version |
+| Writable directories | `dirs[]` (`name`, `mount_path`, `limit_bytes`, `retain`); see [dirs](#dirs托管的可写目录) | Read-write at `mount_path`; one per node | The platform (node-managed directory; needs the agent capability `mount.managed_dirs`) | With the deployment; never pruned |
 | KV disk tier | Cannot (a deployment parameter) | Read-write, at a path the platform picks | The platform (node-managed directory) | While an instance runs on the node; pruned to its limit |
 | Deployment mounts | Cannot (the deployment's `extra_mounts`) | As each row states | The operator | Not managed by the platform |
 | Compute network files | Nothing | Read-only host files the accelerator network needs (same path) | The platform | Every launch |
-| Platform files | Cannot; `/gpuworks` belongs to the platform | `/gpuworks/pre-start.sh` (with `pre_start_*`) | The platform | Rewritten on every container start |
+| Platform files | Cannot; `/gpuworks` belongs to the platform | `/gpuworks/pre-start.sh` (with `pre_start_*`); `/gpuworks/peers.json` (a multi-node rank, read-only, `proto.PeersFile` v1, see [Multi-Node Peers File](deployment-launch-sources.md#多机-peers-文件gpuworks_peers_file)) | The platform (the peers file needs the agent capability `launch.peers_file`) | Rewritten on every container start |
 | Startup wait limit | `start_timeout_sec` | How long the engine health check is waited for | The platform; see [Startup Wait Limit](deployment-launch-sources.md#启动等待上限) | Fixed when the instance is created |
 
 Rules:
 
 - **One variable spelling**: documentation and examples always write the prefixed `${GPUWORKS_X}`; the older unprefixed spelling still expands as an alias in template fields, while a hand-written manual command recognizes only the prefixed one.
 - **One set of units**: sizes in a spec are always bytes (`*_bytes`), durations always seconds (`*_sec`), and container paths always absolute, clean paths (`mount_path`, `unpack_to`).
-- **One container path space**: no two mounts in the table (primary weights, components, assets, KV disk tier, deployment mounts, compute network files) may target the same path or nest inside each other; deployment evaluation and creation check them together, and two mounts on one target are reported as `MOUNT_TARGET_DUPLICATE`.
+- **One container path space**: no two mounts in the table (primary weights, components, assets, dirs, KV disk tier, deployment mounts, compute network files) and the platform directory `/gpuworks` may target the same path or nest inside each other, by one rule (`proto.ContainerPathsOverlap`). The template's own paths (the model mount, component `mount_path`s, asset `unpack_to`s, dir `mount_path`s) are checked against each other on import and a conflict is `CATALOG_MOUNT_PATH_CONFLICT` (its parameters name both fields and paths; several assets may unpack into one directory); together with the deployment's own mounts and the platform's they are checked again on evaluation, creation and every launch, where one target is `MOUNT_TARGET_DUPLICATE`, nesting is `MOUNT_TARGET_NESTED` and a mount on `/gpuworks` is `MOUNT_TARGET_RESERVED` (a deployment restarted as stored keeps a mount it was created with, unless it would cover this launch's peers file).
+- **Agent capability**: each facility only the node's agent can provide has one capability name; a launch that uses it goes only to nodes that announce the capability, and an older agent's node is refused with the scheduling reason `agent_capability_missing` (parameters `capability`, `node`), so the deployment waits for an upgrade or another node instead of starting a container that lacks what the template declared. Declaring `dirs` needs `mount.managed_dirs`; referencing `${GPUWORKS_PEERS_FILE}` in a launch field needs `launch.peers_file`, while a multi-node launch that does not reference it starts on an older agent as before, only without the peers file and its environment variable.
 
 ## entrypoint: The Sole Declaration Point for Entrypoint Overrides
 
@@ -428,7 +454,7 @@ A text spec that relies on tensor parallelism alone, with no expert, data or pip
 Variable references in `args` / `env` / `entrypoint` / `pre_start_*` are expanded on every deployment, regardless of whether placement
 is present. The documented spelling carries the `GPUWORKS_` prefix, such as `${GPUWORKS_NODE_RANK}`; the older spelling without the prefix (`${NODE_RANK}`)
 remains an alias in these template fields and expands the same way. Available variables = resolver return values + platform facts for this launch (the sole sources are
-the vocabulary in `internal/server/placement/expand.go` and `internal/server/deploy/launch_variables.go`). The table lists the prefixed spelling:
+the vocabulary in `internal/server/placement/expand.go` and `internal/server/deploy/launch_variables.go`). The table lists the prefixed spelling (the environment variables and container files the platform provides are not launch variables; see [What the Template Declares and What the Platform Provides](#模板与平台的分工)):
 
 | Variable | Value | When Available |
 |---|---|---|
@@ -440,6 +466,7 @@ the vocabulary in `internal/server/placement/expand.go` and `internal/server/dep
 | `GPUWORKS_SERVED_MODEL_NAME` | The deployment's served name, which the gateway and the health check send to the engine as `model` | Always |
 | `GPUWORKS_API_HOST` | Address the service binds to: `0.0.0.0` for callable, `127.0.0.1` for other engines | Always |
 | `GPUWORKS_API_PORT` | Port the platform reserves for this instance, accessed by the gateway and health checks; `0` for a headless rank | Always |
+| `GPUWORKS_METRICS_PORT` | The extra metrics port the platform reserves for this instance: the launcher exports engine metrics there and the agent scrapes it (see [api.metrics](#apimetrics引擎指标映射)); `0` for a headless rank | Only when the template declares `api.metrics.port: separate` |
 | `GPUWORKS_NNODES` / `GPUWORKS_NODE_RANK` | Number of nodes and index of this rank; `1` / `0` for a single node | Always |
 | `GPUWORKS_HEADLESS` | `1` if this rank does not serve external requests; otherwise `0` | Always |
 | `GPUWORKS_NODE_ADDR` | Routable address of the node this rank runs on (not rank 0's) | Multi-node only |
@@ -448,10 +475,11 @@ the vocabulary in `internal/server/placement/expand.go` and `internal/server/dep
 | `GPUWORKS_PD_SIDE_CHANNEL_HOST` | Address this instance's KV side channel listens on | PD instances whose address is known |
 | `GPUWORKS_PD_SIDE_CHANNEL_PORT` | First port of this rank's extra port block, the KV side channel port; each rank of a multi-node instance has its own | PD instances whose port is allocated |
 | `GPUWORKS_PD_LEADER_SIDE_CHANNEL_PORT` | The side channel port of this instance's leader: its own on the leader, the leader's on a follower. Use it where a follower meets the leader's side channel (such as SGLang's bootstrap server); commands the platform composes do not use it | PD instances whose port is allocated |
+| `GPUWORKS_PEERS_FILE` | The path of this rank's peers file, `/gpuworks/peers.json`, listing every rank of the group and its rails; see [Multi-Node Peers File](deployment-launch-sources.md#多机-peers-文件gpuworks_peers_file) | Multi-node only; a launch that references it goes only to nodes that announce `launch.peers_file` |
 
 Rules:
 
-- **The resolver cannot return platform facts**: returning `MODEL_PATH`, `SERVED_MODEL_NAME`, `API_*`, `NNODES`, `NODE_RANK`, `HEADLESS`, `NODE_ADDR`, `MASTER_*`, or `PD_*`
+- **The resolver cannot return platform facts**: returning `MODEL_PATH`, `SERVED_MODEL_NAME`, `API_*`, `METRICS_PORT`, `NNODES`, `NODE_RANK`, `HEADLESS`, `NODE_ADDR`, `MASTER_*`, `PEERS_FILE`, or `PD_*`
   in resolver results causes an immediate error—the node, port, and rank are not yet available when the resolver runs.
 - **Missing variables cause failure**: unresolved names in args / env / entrypoint / `pre_start_argv` cause deployment errors. A spec without a resolver
   that references a name outside the vocabulary (such as the typo `${NODE_RNAK}` or `${PP_SIZE}` without a resolver) is rejected during import. A single-node deployment
@@ -571,6 +599,7 @@ Declare the engine's metrics endpoint and how engine metrics map to the platform
 api:
   metrics:
     endpoint: /metrics            # Optional; default: /metrics; starts with /
+    port: api                     # Optional: api (default, the endpoint is on the API port) or separate (the platform gives it a port of its own)
     format: prometheus            # Optional: prometheus (default, Prometheus text) or json
     inherit: sglang               # Optional: vllm or sglang; apply that engine's built-in mapping first
     map:                          # Engine metric family (optional {k="v"} selector) -> vocabulary short name
@@ -580,8 +609,14 @@ api:
 
 - **Effective mapping** = inherited mappings (from the engine specified by `inherit`, or the built-in mappings for a `vllm` / `sglang` template's own engine) overlaid entry by entry with `map`; `map` takes precedence for the same key.
 - **`format: json`**: the endpoint returns a JSON document (such as Strata's `/metrics`). Write `map` keys as dot-separated key paths (`totals.output_tokens`) to extract the number at the path (booleans become 1/0; missing or nonnumeric values produce no metric). For strings, write a comparison as `path==value` / `path!=value` (such as `live.state!=idle`), which yields 1 when true and 0 otherwise and can only map to a gauge. Only counters and gauges can be mapped; `inherit` is not allowed, and no built-in engine mapping is applied. Documents larger than 1 MiB or invalid JSON are not read at all.
+- **`port: separate`**: for an engine that owns its API port completely and serves no `/metrics` there (such as a Rust front end with only `/health`, `/v1/models` and `/v1/chat/completions`), a launcher in the image exports the metrics on a second local port, without proxying requests. Once declared, the platform **reserves one more port per instance** (allocated together with the API port, usually right after it) and states it in the launch variable `${GPUWORKS_METRICS_PORT}` (older spelling `${METRICS_PORT}`), which the template uses to tell the launcher where to listen. The agent then scrapes `http://127.0.0.1:<that port><endpoint>` instead of the API port. With `api` or nothing written, behavior is as before: no port is reserved and the variable does not exist.
+  - **The port is a fact of the launch**: the reserved port is stored with the instance's desired state (in the `ports` list of the instance detail, after the API port) and is kept across agent restarts and container restarts. It comes from the template snapshot taken when the deployment was created, so changing `port` in the template later does not affect existing instances; changing it means a new generation of instances. `endpoint`, `format` and `map` still use the current declaration, as in [takes effect at runtime](#apimetrics引擎指标映射).
+  - **Which ranks have it**: only ranks that serve (a single-node instance, rank 0 / the leader of a multi-node instance, every PD leader). A headless rank has none, like its API port, and `${GPUWORKS_METRICS_PORT}` is `0` there, so one command can expand on every rank. Metrics are scraped only from the rank that has the port.
+  - **Preview**: the command in the deployment evaluation uses a placeholder port (as for the API port) and creation replaces it with the port actually reserved.
+  - **The two must come as a pair** (checked at import, catalog package upload and editor save): declaring `separate` without referencing `${GPUWORKS_METRICS_PORT}` in `args` / `env` / `entrypoint` / `pre_start_*` / `manual_command` is `CATALOG_METRICS_PORT_UNREFERENCED` (nothing listens on the scraped port); referencing it without declaring is `CATALOG_METRICS_PORT_UNDECLARED` (the platform reserves no such port; a resolver cannot return a variable of that name either). Any other value of `port`, including a concrete port number (the platform allocates the port; a template cannot choose it), is `CATALOG_METRICS_PORT_INVALID`.
+  - An older agent does not know the port and still scrapes the API port, so it simply gets no engine metrics; the deployment is unaffected.
 - **When omitted**: `vllm` / `sglang` use built-in mappings. `callable` scrapes `/metrics` and automatically applies the corresponding mapping based on the `vllm:` / `sglang:` prefixes found; if neither is present, no engine metrics are produced.
-- **Validation** (import, catalog package upload, editor save): targets must be vocabulary short names; histograms must map by family name, without selectors or scaling; the `_bucket` / `_sum` / `_count` lines of an already mapped histogram family cannot be mapped again; scale factors must be nonnegative; `inherit` must be `vllm` / `sglang`; `format` must be `prometheus` / `json`. With `json`, keys must be key paths (optionally with `==value` / `!=value` comparisons), targets cannot be histograms, comparisons cannot map to counters, and `inherit` is not allowed. Error codes are `CATALOG_METRICS_*`.
+- **Validation** (import, catalog package upload, editor save): targets must be vocabulary short names; histograms must map by family name, without selectors or scaling; the `_bucket` / `_sum` / `_count` lines of an already mapped histogram family cannot be mapped again; scale factors must be nonnegative; `inherit` must be `vllm` / `sglang`; `format` must be `prometheus` / `json`; `port` must be `api` / `separate`. With `json`, keys must be key paths (optionally with `==value` / `!=value` comparisons), targets cannot be histograms, comparisons cannot map to counters, and `inherit` is not allowed. Error codes are `CATALOG_METRICS_*`.
 - **Takes effect at runtime**: mappings use the **current** declaration of the spec used by the deployment and are not frozen with the deployment snapshot. After a template is saved or the built-in catalog changes with a server upgrade, running instances referencing that spec update in place without restarting ([ADR 0039](../adr/0039-inference-metric-sources.md)). Deployments whose spec has been deleted continue to use the `api` contract in their snapshot. `api.metrics` is not considered when determining whether a deployment differs from its template.
 
 ### api.request_stats: Per-Request Statistics in Responses
@@ -636,6 +671,30 @@ A model referenced by `model_id` must be in the same document/catalog package or
   The server generates the template editor's YAML using the same catalog types; it contains only the current model, not the component models it references. Empty fields are omitted, and defaults are not added.
 - **Clone or edit a template with documentation and assets**: the generated catalog package also includes referenced component models; these entries contain no specs or documentation.
 - **Upload a catalog package**: the package must still include the component models it references.
+
+## dirs: Managed Writable Directories
+
+When an engine needs a host directory it can write, that survives its instances being recreated, and that is cleaned up when the deployment is deleted (a session store, a spill area, logs, or a compile cache or snapshot it derives at first start and reuses), the spec declares `dirs`:
+
+```yaml
+dirs:
+- name: pico-state
+  mount_path: /pico
+  limit_bytes: 429496729600
+  retain: deployment
+```
+
+How it divides the work with weights, assets, the KV disk tier and deployment mounts is in [What the Template Declares and What the Platform Provides](#模板与平台的分工).
+
+- **One per node**: on every node an instance of the deployment lands on, the agent creates `managed-dir/<deployment>-<creation second>/<name>` under the node's runtime mount root (`GPUWORKS_RUNTIME_MOUNT_ROOT`, by default `<state>/runtime-mounts`, `<state>` on docker nodes), owned by the runtime mount owner, and mounts it read-write at `mount_path`. docker, nerdctl, runveil (udocker), Kubernetes and host processes (paths rewritten to the host directory) treat it as any other mount. Instances of one deployment on one node share the directory; a recipe that needs them apart splits it into subdirectories itself with the existing `${GPUWORKS_NODE_RANK}`. There is no launch variable for the path: the recipe writes `mount_path` directly.
+- **One mechanism with the KV disk tier**: the KV disk tier is the same kind of managed directory, switched on by a deployment parameter and kept under `kv-disk/<deployment>`; it is a cache, removed once the last instance leaves the node and pruned past its ceiling by the sweeper. `dirs` is state, kept until the deployment is deleted and never pruned.
+- **Kept until the deployment is deleted**: stopping, restarting, failing over or re-forming a multi-node group leaves it alone, and an instance that returns to the same node sees what was written there. Once the deployment is deleted (its instances confirmed torn down, its row gone) the server tells every connected node to remove the deployment's directories; a node offline at the time lists the groups it holds in its next hello, the server's replay names those whose deployment no longer exists, and the node removes them then. A group a desired instance still mounts is kept. The group name carries the deployment's creation time, so after a database change (a reinstalled server, a restored backup) a new deployment with the same id does not get the old directory.
+- **Admitted on the declared size**: scheduling requires the disk the node keeps managed directories on (the agent reports its free space as `managed_dirs`) to hold every `limit_bytes`, the KV disk tier's ceiling and the disk reserve (the storage settings' reserve, else a tenth of that disk, at most 50 GiB); when the agent reports that disk is shared with the models root or the current runtime's image store, the weights to download and the image to unpack count there too. Otherwise the node is refused with `insufficient_managed_dir_disk`, and the reason states how much is needed, available, declared and reserved. A node that does not report the disk (an older agent) is not checked here. Admission does not subtract what a directory already holds, because that is already out of the free space.
+- **Not pruned or capped**: the directory holds state, not a cache, so the platform deletes nothing in it by size and sets no filesystem quota; staying within `limit_bytes` is the recipe's part.
+- **Path conflicts**: `mount_path` shares one container path space with every other mount; the rule is in [What the Template Declares and What the Platform Provides](#模板与平台的分工).
+- **Agent capability**: the agent announces `mount.managed_dirs` in its hello; a launch that declares `dirs` goes only to nodes that announce it, and an older agent's node is refused with `agent_capability_missing`. When a directory cannot be prepared the instance fails to start with `MANAGED_DIR_PREPARE_FAILED`.
+
+See [ADR 0077](../adr/0077-template-managed-writable-dirs.md) for the trade-offs.
 
 ## performance_tradeoffs: Reasons for Performance-Costing Settings
 
@@ -723,13 +782,38 @@ Warnings do not block import. A successful import response includes the same `wa
 - The image catalog (system image manifest) is a separate domain. For the format, see
   [Image Catalog and Inference Image Families](image-families.md#manifest-格式).
 
-<!-- translation-source-sha256: 1ecdbce61f67680fac8c279cf9cd01ca275543dbadb3cbf78cc680f9c29d968b -->
+<!-- translation-source-sha256: 987d33a952651d5b137a2c3a48aacfbf40b3efecfc00a4738e536304577ec69c # Inference Catalog model.yaml Syntax Reference -->
+<!-- translation-source-sha256: 11f2dc6a5c907ebac9e360954770fd0c505b7ac3cf3ff9722b83b7d87dbf411a ## Overview -->
+<!-- translation-source-sha256: d1cab9aa487c9a1159b67fd447e19bf5893c615e86468538eb50068dd1c9d3b7 ## Model-Level Fields -->
+<!-- translation-source-sha256: e6706c6959237b1746a59ac8b76ec4f509051bc6c8e72113f5eaed4b7f0cc215 ## Spec-Level Fields -->
+<!-- translation-source-sha256: 5514abf483ab7da4e47e650340bc5fa104c07f131905307d15db4b9eceb665bc ### args: Decode Known Parameters Into Fields and Pass Unknown Tokens Through Verbatim -->
+<!-- translation-source-sha256: 8e5e8b20bd4d4c8cc7a64d9993eaebfb6a9139b8d8f7471a62c84c07e140bfec ### weights.sources: Compact Single-Key Form -->
+<!-- translation-source-sha256: bee9f386d67fd025872be87fc0d6417ca7ea768faa95f1e839f32af63e0822f4 ### image_sources: Image Sources Declared by the Template -->
+<!-- translation-source-sha256: ad7eaab32f35f7cd46870557a94a23d13cc8e4863699c8207732d7291eac22d4 ### GPU Selectors (gpus / unsupported[].gpus) -->
+<!-- translation-source-sha256: 10f8e878fe47c8726cfd234b9ccbd6beffa018e6242632cb689e45ea41bff5fe ### Display Names -->
+<!-- translation-source-sha256: e3430d7e59546f9f0e233c4f700ce07ec690a95a04bb7273d626354f5d919d1f ### assets[] -->
+<!-- translation-source-sha256: 83b305081ab8f015fcc842b0f7d0a0d03a0c7e75846702aff54692db07c1894d ### PD Layout and Manual Command -->
+<!-- translation-source-sha256: 976fe75b4bf21fd820f6239ae639396f075b0966d7b988fe601b905a08885f96 ## What the Template Declares and What the Platform Provides -->
+<!-- translation-source-sha256: ca8ad9d228ec55ff4037230581f5a1230b2b5fed81b4a0103dfa73df72cd835d ## entrypoint: The Sole Declaration Point for Entrypoint Overrides -->
+<!-- translation-source-sha256: 8aa019b6e8ab20f918555f11275840ef6da3032607bd6140c43350c2e156f044 ## placement: Starlark Topology Derivation -->
+<!-- translation-source-sha256: 8730a225b2be22fb1a6ce28a3795c8c6ef8697f0af90adfad1c78236c1eb3dd1 ### Variable Expansion -->
+<!-- translation-source-sha256: 326983de77aaf4bb52b0516a7cb8fe35122d37bffd501bf241bd514297f95ad7 ### How Thresholds Relate to Scheduling Admission -->
+<!-- translation-source-sha256: b01668b34d029e72fa32f03c01631d123be2ab05c7fb5ad8edfcad66faef7c82 ## api: External HTTP Contract -->
+<!-- translation-source-sha256: 4070ee0770711185358f42c24fdc671a935929a1849ef47543173cae553e89a3 ### api.tokenizer_ref: Independent Tokenizer Source -->
+<!-- translation-source-sha256: 7a250e5a02165b91282a0bc517187d409ca0a3991ff66ccde34262b5bda86067 ### api.metrics: Engine Metric Mapping -->
+<!-- translation-source-sha256: c43a7f1c915e00849d832b88aa1423056a03dc492634a4d24793ca3c94807e8d ### api.request_stats: Per-Request Statistics in Responses -->
+<!-- translation-source-sha256: f2dcc459ab368caf6601fff2c116fb06cdf6f4c7e4b03395844423906e1a87c6 ## components: Multiple Weight Sets -->
+<!-- translation-source-sha256: 5ffa7b32ad221104b1942267515674a5d244169f2e115e30796d882f6ccf52d0 ## dirs: Managed Writable Directories -->
+<!-- translation-source-sha256: d8159910bf55c76c4d66346dec46c313fadab1bd4cc0c20d7d069416a37908d4 ## performance_tradeoffs: Reasons for Performance-Costing Settings -->
+<!-- translation-source-sha256: 2ebe9bf5d43fdc1e745261f42679fd5503d1e94c1c37aaa7ffffdc4a46edbf40 ## Pre-Import Checks and Warnings -->
+<!-- translation-source-sha256: 439b1bcae33f36e507bd1217f4552947335ee6d22d0072b928a34e3ba1fbd9ac ## Validation Entry Points and Tools -->
 <!-- translation-localized-code-block: a580200df2b28bc011bb736a64288086932955375e5ae8897762ee97bd667e26 8e0792250b6c0eb3ec0dad5bfca28308dc0b1afeb27e9c33bb24ddb21e20ba07 -->
 <!-- translation-localized-code-block: 9a54a7271e193f98f78581cbb5fb446f8d5d1aa46c942d8f4fb3536f5f81b115 22ec1397368cfc809b65ad278feb838b5690c611dd587bc022c6e151b5596d99 Translate YAML comments and illustrative user-facing reason text. -->
+<!-- translation-localized-code-block: 4cf9267c119973bda779b8e29a9ad818c097c803df34a09ac14492502ab9dce2 e78acb98a7a082fdad6d2080ea7754cc18152f1bec68f60c312e46e33f3bfd59 -->
 <!-- translation-localized-code-block: 06db934de28e923689ee3d7a5291cfb9c5c39413ce9a4c3a87dfc3b0d6dc051d 213afdd99d9dc95fee88560f64a09e012578484b424f46c160ffd92f44b8bd72 Translate YAML comments and illustrative user-facing reason text. -->
 <!-- translation-localized-code-block: 0db7a21f5d58dc3f0536ef0b3909ce67ba6415f6c0e158dbee9122f79b1f2209 8da5a4455c5d0ab53369e8e0b4455543b9acd70a2615f7faf4b34b620d9cd204 Translate the inline shell comment. -->
 <!-- translation-localized-code-block: a611f2e8254725bdcf88ae19eb23c532ef8c679903131a8881bbd61f09aafdb2 33859cded67f664966175739bc36d429175e7fe4c8f3d71422f40719d24be6e6 Translate YAML comments and illustrative user-facing reason text. -->
 <!-- translation-localized-code-block: bee5e6aa5c268b0bca3195996e1394ed7ca27c6938ea75731026b323c425c162 50a7b72308d2093f9b328d73f1c889122beed6408c02fe79a803f0bd63b3246f Translate YAML comments and illustrative user-facing reason text. -->
-<!-- translation-localized-code-block: d0cf90e53d24fed8cc724f20d6eb7df85810710388a02b23e6ede399e6bb8294 9a3a3028b77be7c62002a4762ea29528a08dd641897608dcc4383e36d62744cb Translate YAML comments and illustrative user-facing reason text. -->
+<!-- translation-localized-code-block: ed93aa7d8dc7ab4de4eb6a57ba14a8d08385ab5c6f68ce1d01d09b1520808e6c 6eea2db5a786a386d47baff90f8f621ce18884b6a8f127c011e81e77c4de00ed -->
 <!-- translation-localized-code-block: a7d524edd753182838ebcc0b5d00da0acb23a4e6ceb9481fd31f031c520b6138 7454b07423d39cda5d3f4e571f923044557c02bd167ecf53284bb63e4e601388 Translate YAML comments and illustrative user-facing reason text. -->
 <!-- translation-localized-code-block: cb01e807364a6fa35f11fd6e177ffbbcbfe444a9860c0043a088d4693962c102 7c96acf3d55e07b7b1526005845a7f4eaae06818f9de255105ab3e2d2216985f Translate YAML comments and illustrative user-facing reason text. -->

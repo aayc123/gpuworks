@@ -12,13 +12,14 @@ set -eu
 #   2. Budget regressions vs baseline — the ratchet in part 1 is a promise about
 #      this tree in isolation; this part makes it mechanical by diffing
 #      scripts/arch-constraints.txt against the copy at the merge base with
-#      origin/master. A "max" key whose limit grew, or a "min" key whose limit
-#      shrank, fails unless that line carries a trailing `# raised: <reason>`
-#      comment. New or removed keys are not a regression. When no baseline can
-#      be resolved (shallow clone, no origin remote, already on the default
-#      branch) this prints a NOTE and is skipped, never failed.
+#      origin/master. A "max" or "warn" key whose limit grew, or a "min" key
+#      whose limit shrank, fails unless scripts/arch-constraints.md records it
+#      in a `- 放宽` line naming a Jira ticket and the condition for bringing
+#      the limit back. New or removed keys are not a regression. When no
+#      baseline can be resolved (shallow clone, no origin remote, already on
+#      the default branch) this prints a NOTE and is skipped, never failed.
 #      A third direction, "warn", is a soft budget: over the limit prints a
-#      WARNING and never fails, and the baseline comparison ignores it.
+#      WARNING and never fails.
 #      ui_bundle_gzip_kb is a warn key measured by scripts/check_ui_bundle_size.sh
 #      after a UI build; this script only skips it.
 #   3. Dependency direction — hard structural rules (plan §5.3). These are not
@@ -29,6 +30,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 BUDGET_FILE="scripts/arch-constraints.txt"
+BUDGET_DOC="scripts/arch-constraints.md"
 if [ ! -f "$BUDGET_FILE" ]; then
   echo "missing $BUDGET_FILE" >&2
   exit 1
@@ -228,7 +230,7 @@ measure() {
   ui_untested_shared_files)
     untested_shared_ui | grep -c . || true
     ;;
-  ui_copy_long_strings | ui_copy_caveat_strings | ee_ui_internal_imports)
+  ui_copy_*_strings | ui_copy_inline_help_refs | ui_common_locale_keys | ee_ui_internal_imports)
     echo "UI"
     ;;
   ui_bundle_gzip_kb)
@@ -568,6 +570,12 @@ while IFS= read -r line || [ -n "$line" ]; do
     failures=$((failures + 1))
     continue
   fi
+  # A line is key, limit, direction and nothing else: a reason at the end of
+  # the line is where two merge requests touching one budget conflict.
+  if [ -n "$(printf '%s\n' "$line" | awk -F'\t' '{print $4}')" ]; then
+    echo "  FAIL: $key carries a fourth field; reasons belong in the key's section of $BUDGET_DOC" >&2
+    failures=$((failures + 1))
+  fi
   if ! measured=$(measure "$key"); then
     echo "  FAIL: $key measurement failed" >&2
     exit 1
@@ -639,13 +647,16 @@ done < "$BUDGET_FILE"
 
 # --- budget regressions vs baseline -----------------------------------------
 # Part 1 above is a ratchet on THIS tree; it cannot by itself stop someone
-# from raising a limit in scripts/arch-constraints.txt without saying why,
+# from raising a limit in scripts/arch-constraints.txt without a record,
 # since a raised limit still "passes" its own new value. This section catches
 # that by comparing the file against the copy at the merge base with
 # origin/master (or, when CI names the merge request's base commit, against
-# $GPUWORKS_ARCH_BASELINE; the checkout must then hold that commit). A key that loosened without a trailing
-# `# raised: <reason>` comment fails; a key added or removed on this branch is
-# not a regression.
+# $GPUWORKS_ARCH_BASELINE; the checkout must then hold that commit). A key
+# that loosened fails unless scripts/arch-constraints.md holds the line
+#   - 放宽 `<key>` <old>→<new>（GWKS-<n>）：<reason>；回落条件：<condition>
+# with the baseline limit as <old> and the current one as <new>. A raise that
+# is already in the baseline is not looked at; a key added or removed on this
+# branch is not a regression.
 echo "budget regressions vs baseline (scripts/arch-constraints.txt):"
 
 # resolve_arch_baseline prints a commit sha on stdout and returns 0, or
@@ -700,30 +711,22 @@ else
       if [ "$cdirection" != "$bdirection" ]; then
         continue # a direction flip is caught by the per-key loop above.
       fi
-      raised=no
-      case "$cline" in
-      *'# raised:'*) raised=yes ;;
-      esac
-
+      loosened=no
       case "$cdirection" in
-      max)
-        if [ "$climit" -gt "$blimit" ] && [ "$raised" != yes ]; then
-          echo "  FAIL: $bkey max budget loosened without a '# raised: <reason>' comment ($blimit -> $climit)" >&2
-          failures=$((failures + 1))
-          section_failures=$((section_failures + 1))
-        fi
-        ;;
-      min)
-        if [ "$climit" -lt "$blimit" ] && [ "$raised" != yes ]; then
-          echo "  FAIL: $bkey min budget loosened without a '# raised: <reason>' comment ($blimit -> $climit)" >&2
-          failures=$((failures + 1))
-          section_failures=$((section_failures + 1))
-        fi
-        ;;
+      max | warn) [ "$climit" -gt "$blimit" ] && loosened=yes ;;
+      min) [ "$climit" -lt "$blimit" ] && loosened=yes ;;
       esac
+      record="- 放宽 \`$bkey\` $blimit→$climit（GWKS-"
+      if [ "$loosened" = yes ] \
+        && ! grep -E "^$record[0-9]+）：.+；回落条件：.+" "$BUDGET_DOC" >/dev/null 2>&1; then
+        echo "  FAIL: $bkey $cdirection budget loosened ($blimit -> $climit) without a record; add this line under its section in $BUDGET_DOC:" >&2
+        echo "    $record<number>）：<reason>；回落条件：<condition for bringing it back to $blimit>" >&2
+        failures=$((failures + 1))
+        section_failures=$((section_failures + 1))
+      fi
     done <"$baseline_tmp"
     if [ "$section_failures" -eq 0 ]; then
-      echo "  ok: no budget loosened without a recorded reason (baseline $baseline_sha)"
+      echo "  ok: no budget loosened without a record in $BUDGET_DOC (baseline $baseline_sha)"
     fi
   else
     echo "  NOTE: $BUDGET_FILE not found at baseline $baseline_sha; skipping"
@@ -768,7 +771,7 @@ leaf_is_waived() {
   return 1
 }
 
-for leaf in inferenceapi messages placement acquisition chipmatch partitioncap netplan pdmode kvbackend nodelabel uxrecord uxstore tracecontext traceexport usagereport yieldpolicy lifecycle nodepolicy; do
+for leaf in inferenceapi messages placement acquisition chipmatch partitioncap netplan pdmode kvbackend nodelabel uxrecord uxstore tracecontext traceexport usagereport yieldpolicy lifecycle; do
   if pkg_imports "./internal/server/$leaf" | grep -qF 'gpuworks/internal/server/store'; then
     if leaf_is_waived "$leaf"; then
       echo "  WAIVED: leaf package $leaf still imports store (planned removal)"
@@ -890,9 +893,27 @@ forbid_import ./internal/server/controller \
 
 # Shared orchestration only sees provider contracts. The app imports all solely
 # to register drivers; concrete assembly and ownership rules belong to drivers.
-forbid_import ./internal/server/provider \
-  'gpuworks/internal/server/provider/' \
-  'provider service does not import concrete drivers'
+# The connection-test runner (provider/testconn) is a leaf the service drives,
+# not a driver, so it is exempt from the driver-import ban.
+provider_driver_imports=$(pkg_imports ./internal/server/provider \
+  | grep -F 'gpuworks/internal/server/provider/' \
+  | grep -vx 'gpuworks.ai/gpuworks/internal/server/provider/testconn' || true)
+if [ -n "$provider_driver_imports" ]; then
+  echo "  FAIL: provider service does not import concrete drivers" >&2
+  echo "$provider_driver_imports" | sed 's/^/    /' >&2
+  failures=$((failures + 1))
+else
+  echo "  ok: provider service does not import concrete drivers"
+fi
+# The exemption holds only while testconn stays a leaf: it knows neither the
+# provider contracts (the service hands it plain inputs and vendor checks),
+# nor any driver, nor the store.
+forbid_import ./internal/server/provider/testconn \
+  'gpuworks/internal/server/provider' \
+  'provider connection-test runner does not import the provider service or drivers'
+forbid_import ./internal/server/provider/testconn \
+  'gpuworks/internal/server/store' \
+  'provider connection-test runner does not import store'
 forbid_import ./internal/server/controller \
   'gpuworks/internal/server/provider/' \
   'controller does not import concrete provider drivers'

@@ -9,6 +9,8 @@
 - **server**（`cmd/gpuworks` → `internal/server`）：控制面 + Web UI + OpenAI 兼容网关。子命令 `serve` / `install` / `upgrade` / `reset-password` / `migrate`。
 - **agent**（`cmd/gpuworks-agent` → `internal/agent`）：跑在每个 GPU 节点上，负责探测、容器运行、采集。子命令 `run` / `smoke` / `upgrade` / `doctor` / `grant-device-access` / `bench` / `runveil`（ps/images/exec/logs 排障）/ `uninstall`。
 
+控制面集群的引擎留在本仓库的 `linux && dqlite` 构建标签后，仍是 `CGO_ENABLED=0`；默认构建与社区发行版不含集群运行时。集群命令（`cluster`、`cluster-*`）、数据库辅助程序 `gpuworks-dqlite`（唯一使用 cgo 的制品）及其原生构建不在本仓库：带集群运行时的构建经 `cli.Options.Commands` 注册命令，并把辅助程序装在 server 旁边。server 只启动与 `cluster.HelperProtocolVersion` 一致的辅助程序。
+
 逐包说明见 `docs/dev/code-map.md`。
 
 ### 连接架构
@@ -29,6 +31,7 @@ yamux 流：`ctrl`（双向 JSON Lines 控制面）、`telemetry`（agent 在数
 - `internal/server/deployment` 是部署创建/评估与部署读模型的唯一入口（纯状态推导在 `planning`），不依赖 `net/http` 与 `api`（`make check-architecture` 守护）；api 的 handler 只做解码、调用、按 `Kind` 映射 HTTP 状态，新的部署业务逻辑写进 `deployment`。
 - `messages` 产语言中立 ProductError（稳定 code + 插值参数 + 英文 fallback），人类可读文本归客户端 locale。
 - `selfinstall` / `installcred` 是叶子包，install 与 server 两端共用，不得反向依赖 server。
+- 控制面集群：`internal/server/cluster`（+`identity`）经 go-dqlite 的纯 Go client/driver 连接自己启动并监管的 `gpuworks-dqlite` 子进程，不链接 libdqlite；store 的集群文件与 app 的成员生命周期都在 `dqlite` 标签后，各有 `!linux || !dqlite` 的桩。`go.mod` 保留 `github.com/canonical/go-dqlite/v3`，因为带标签的引擎引用它的 client/driver；本仓库用未打补丁的版本只做编译检查（`make check-tagged-build`），带标签的构建里凡是打开 store 的测试都要启动真实辅助程序，所以带标签的测试只经 `make test-dqlite-engine` 跑：`GPUWORKS_DQLITE_BIN` 没指向辅助程序时整组跳过并写明没有跑（`GPUWORKS_TEST_STRICT=1` 下失败）；`internal/server/cluster` 自己的用例另有逐条的 `requireDatabaseHelper`。引擎被外部构建依赖的面由 `internal/server/cluster/external_surface_test.go` 与 `internal/server/app/cluster_command_surface*_test.go` 钉住，改动前先看这些测试。
 - agent `gpu` 不用 NVML cgo，走 `nvidia-smi` + `/proc` + sysfs；`gpu.Prober` 可注入做 hermetic 测试。
 - agent `runtime` driver shell out 到 CLI，不用 Go SDK；`runtime.Driver` 可注入做 hermetic 测试。
 - `internal/engines` 是纯叶子包无依赖：`modelmeta` 经 `inferenceapi` 被 `deploy` 依赖、agent 又不能依赖 server，两侧只能共用这个叶子包。
@@ -81,7 +84,8 @@ make demo       # 起 server + agent，验证接入/心跳/重连
 - 关闭一个主题：把 outcome 写进 frontmatter、改 `status`，整个目录从 `work/` 原名搬进 `archive/`；独立完成的调研放 `research/<YYYY-MM-DD>-<主题>/`。
 - **计划文档的状态只写在文件自身的 YAML frontmatter 里**（`title`/`status`/`created`/`updated`/`summary`/可选一句话 `outcome`，`status: superseded` 必须带 `superseded_by`，`status: dropped` 必须带 `outcome`）；`artifacts/README.md`（work/research/archive 三张表）、`artifacts/.ignore` 与 `artifacts/plan.md` 的生成区块都由此派生，不手改。新增计划或改动状态后跑 `go run ./scripts/artifactsindex -write` 重新生成；`make check-artifacts` 守护一致性、每个主题目录的入口文件与状态约束，以及 `artifacts/...` 路径引用不失效（artifacts 内的失效引用报错，主仓库指向 artifacts 的失效引用只告警）。
 - **`docs/` 内链由 `make check-doc-links` 守护**（`scripts/doclinks`）：相对 Markdown 链接及 `#锚点` 必须指向真实文件/标题，`docs/` 下不用 `[[wiki]]` 引用（`CONTEXT.md` 除外）；图片放 `docs/assets/`，用相对路径引用；指向私有 `artifacts/` 的链接不在检查范围内。
-- **改了 `docs/` 下已有英文译本的页面，同一提交里要同步 `docs-en/` 同路径的译文**，复核后用 `python3 docs-site/check_translations.py --write docs/<路径>.md` 把该中文页新的 SHA-256 写进英文页末尾的标记注释（标题结构与代码块须与中文一致；有意本地化的代码块复核后加 `--approve-code-blocks` 登记）；`make check-translations` 守护（`make test` 包含，CI 的 docs-build 同样检查）。译本是否存在看 `docs-en/` 里有没有同路径文件。
+- **改了 `docs/` 下已有英文译本的页面，同一提交里要同步 `docs-en/` 同路径的译文**，复核后用 `python3 docs-site/check_translations.py --write docs/<路径>.md` 把该中文页各小节新的 SHA-256 写进英文页末尾的标记注释（标题结构与代码块须与中文一致；有意本地化的代码块复核后加 `--approve-code-blocks` 登记）；`make check-translations` 守护（`make test` 包含，CI 的 docs-build 同样检查）。译本是否存在看 `docs-en/` 里有没有同路径文件。
+- **`docs/reference/api.md` 的派生内容用 `make api-docs` 重新生成，冲突时不手工合并**：英文页末尾的哈希和 AI 助手接口目录 `internal/server/aihelper/apidocs_gen.go` 都由它重写。合并或 rebase 在这两处冲突时，先解决中英文正文的冲突，再跑 `make api-docs` 并 `git add`；正文还有冲突标记时它会拒绝执行。
 - `artifacts/.ignore` 列出全部 superseded/dropped 文档，`rg` 默认跳过；需要搜到它们时用 `rg --no-ignore`。
 - `todo.md` 只记真实缺陷、风险与待决策项（T 编号）；计划自带的验收流程不进 todo，未做完的写进该计划的 `outcome`。已解决的 T 项按月归档到 `artifacts/archive/todo-resolved/<YYYY-MM>.md`；已确认但决定暂不修的 T 项迁入根目录 `known-issues.md`，保留原编号与原文并加一行搁置记录，条件变化时迁回 `todo.md`。
 - 代码注释里引用设计依据，指向 `docs/` 或 ADR；docs 还没覆盖到的细节先补进 docs，不指向 `artifacts/`。

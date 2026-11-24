@@ -10,6 +10,23 @@ import (
 )
 
 func (s *Service) resolveTemplateWeightModelForNode(source weightSource, original *store.InferenceModel, engine, quantization string, weightBytes int64, nodeID uint, pinned []uint, explicitProvider ...bool) (*store.Model, error) {
+	return s.resolveWeightArtifact(source, original, engine, quantization, weightBytes, nodeID, pinned, false, len(explicitProvider) > 0 && explicitProvider[0])
+}
+
+// resolveWeightArtifact is the registered artifact a template weight source
+// resolves to, registering it when none serves. exactRevision is the revision
+// rule of a rank-scoped artifact: one of a known, different revision is never
+// a substitute for the revision the source names, however ready it is
+// (TemplateWeightMatchesModel), so a changed revision creates its own artifact.
+func (s *Service) resolveWeightArtifact(source weightSource, original *store.InferenceModel, engine, quantization string, weightBytes int64, nodeID uint, pinned []uint, exactRevision, explicit bool) (*store.Model, error) {
+	model, err := s.templateWeightForPlanning(source, original, engine, quantization, weightBytes, nodeID, pinned, exactRevision, explicit)
+	if err != nil || model.ID != 0 {
+		return model, err
+	}
+	return s.d.Store.UpsertModel(model)
+}
+
+func (s *Service) templateWeightForPlanning(source weightSource, original *store.InferenceModel, engine, quantization string, weightBytes int64, nodeID uint, pinned []uint, exactRevision, explicit bool) (*store.Model, error) {
 	if source.RepoID == "" || original == nil {
 		return nil, store.ErrNotFound
 	}
@@ -22,14 +39,13 @@ func (s *Service) resolveTemplateWeightModelForNode(source weightSource, origina
 	if findErr != nil && findErr != store.ErrNotFound {
 		return nil, findErr
 	}
-	explicit := len(explicitProvider) > 0 && explicitProvider[0]
 	models, err := s.d.Store.ListModels(source.RepoID)
 	if err != nil {
 		return nil, err
 	}
 	candidates := make([]store.Model, 0, len(models))
 	for _, model := range models {
-		if TemplateWeightMatchesModel(source, &model) && (!explicit || strings.EqualFold(strings.TrimSpace(model.Source), strings.TrimSpace(source.Provider))) {
+		if TemplateWeightMatchesModel(source, &model) && !(exactRevision && revisionConflicts(source, &model)) && (!explicit || strings.EqualFold(strings.TrimSpace(model.Source), strings.TrimSpace(source.Provider))) {
 			candidates = append(candidates, model)
 		}
 	}
@@ -65,7 +81,7 @@ func (s *Service) resolveTemplateWeightModelForNode(source weightSource, origina
 			"provider": "local", "repo_id": source.RepoID, "reason": "local_model_not_registered",
 		})
 	}
-	return s.createTemplateWeightModel(source, original, engine, quantization, weightBytes)
+	return templateWeightModel(source, original, engine, quantization, weightBytes), nil
 }
 
 func selectExplicitTemplateArtifact(providerCandidates []store.Model, revision string, weightBytes int64, availability map[uint]templateArtifactState) *store.Model {

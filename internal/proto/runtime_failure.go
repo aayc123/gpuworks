@@ -156,15 +156,16 @@ const (
 	// ErrorContainerRuntimeUnavailable: the node's container runtime could
 	// not be set up (Runtime, Detail).
 	ErrorContainerRuntimeUnavailable = "CONTAINER_RUNTIME_UNAVAILABLE"
-	// ErrorRuntimeAssetPrepareFailed, ErrorPreStartPrepareFailed and
-	// ErrorKVDiskPrepareFailed: a host-side preparation of the container's
-	// mounts failed (Detail). For pre-start that is installing the wrapper
+	// ErrorRuntimeAssetPrepareFailed, ErrorPreStartPrepareFailed,
+	// ErrorKVDiskPrepareFailed and ErrorPeersFilePrepareFailed: a host-side
+	// preparation of the container's mounts failed (Detail). For pre-start that is installing the wrapper
 	// (writing /gpuworks/pre-start.sh, or a launch it cannot wrap); the
 	// preparation itself runs inside the container, and its failure is the
 	// container exiting (ErrorContainerExited).
 	ErrorRuntimeAssetPrepareFailed = "RUNTIME_ASSET_PREPARE_FAILED"
 	ErrorPreStartPrepareFailed     = "PRE_START_PREPARE_FAILED"
 	ErrorKVDiskPrepareFailed       = "KV_DISK_PREPARE_FAILED"
+	ErrorPeersFilePrepareFailed    = "PEERS_FILE_PREPARE_FAILED"
 	// ErrorMountVolumeUnsupported: a mount names a runtime-managed volume
 	// and the node's container runtime has no named volumes (Runtime is the
 	// driver, Resource the volume).
@@ -174,6 +175,9 @@ const (
 	// the volume). A volume starting with "/" would be a bind mount the host
 	// path rules never judged.
 	ErrorMountVolumeInvalid = "MOUNT_VOLUME_INVALID"
+	// ErrorManagedDirPrepareFailed: a template-declared writable directory
+	// (MountPurposeManagedDir) could not be prepared on the host (Detail).
+	ErrorManagedDirPrepareFailed = "MANAGED_DIR_PREPARE_FAILED"
 	// ErrorDGPUPartitionFailed: the dGPU limit could not be applied (Detail).
 	ErrorDGPUPartitionFailed = "DGPU_PARTITION_FAILED"
 	// ErrorContainerRunFailed: the runtime refused to create or start the
@@ -188,6 +192,15 @@ const (
 	// ErrorContainerUnhealthy: the runtime's health check failed a headless
 	// worker that is still running.
 	ErrorContainerUnhealthy = "CONTAINER_UNHEALTHY"
+	// ErrorContainerProcessesNotDrained: the container was signalled but
+	// processes of it are still on the node, so its accelerators, ports or
+	// process-table slots are not free yet (Resource is the container,
+	// Detail what remains).
+	ErrorContainerProcessesNotDrained = "CONTAINER_PROCESSES_NOT_DRAINED"
+	// ErrorContainerRemovalPending: the container could not be removed and
+	// the agent will try again (Resource, Detail). It is the code of a
+	// teardown failure that names no more specific outcome.
+	ErrorContainerRemovalPending = "CONTAINER_REMOVAL_PENDING"
 	// ErrorEngineHealthEndpointInvalid: the health endpoint the desired state
 	// names cannot be requested.
 	ErrorEngineHealthEndpointInvalid = "ENGINE_HEALTH_ENDPOINT_INVALID"

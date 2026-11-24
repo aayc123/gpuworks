@@ -212,6 +212,7 @@ Cookie 设置为 `HttpOnly`、`SameSite=Lax`，其中保存的是不透明会话
 | GET | `/api/v1/agent/connect` | agent 长连接 WS upgrade 入口 | 节点 token（非管理 JWT） |
 | GET | `/install.sh` | curl\|sh 安装脚本 | 无 |
 | GET | `/api/v1/healthz` | 健康检查（管理面） | JWT |
+| GET | `/api/v1/readyz` | 业务就绪检查（无需登录，供负载均衡与集群入口探测）：就绪时 200，正文固定为 `{"status":"ready"}`；业务库不可读或成员尚未开放业务时 503；响应不含任何配置、身份或计数 | 无 |
 | GET | `/api/v1/peer-transfers` | 当前管理节点进程的 peer 传输观测；可选单个 `transfer_id`，返回有效中继预算、活动中继数、带宽额度等待数、累计结果及有界运行观测。无对应观测返回空列表，未接入观测能力返回 503；非法筛选返回 400。计数为内层 TLS 流字节，不代表文件校验进度。 | JWT |
 | GET | `/healthz` | 健康检查（无需登录，供探活/负载均衡） | 无 |
 | GET | `/api/v1/engines?target_vendor=amd` | 面向指定厂商的引擎参数字典（省略 `target_vendor` 时使用通用 profile，未知厂商返回 400）；AMD profile 只表示实现准入范围，不证明特定 GPU/ROCm 版本已通过真机验收 | JWT |
@@ -238,7 +239,6 @@ Cookie 设置为 `HttpOnly`、`SameSite=Lax`，其中保存的是不透明会话
 | POST | `/api/v1/nodes/{uuid}/connection-diagnostics` | 在线经既有ctrl读取Agent运行态，无需SSH；另有保存地址、可选SSH检查及历史公网入口。空body或`{}`，不执行恢复或修改地址；见[节点连接诊断](#节点连接诊断) | JWT(admin) |
 | POST | `/api/v1/nodes/{uuid}/upgrade` | 触发 agent 远程升级；Kubernetes 节点与普通节点一样原地升级（agent 运行在节点状态目录里，声明 `upgrade.kube_binary`）；没能从状态目录启动的（例如 noexec）不声明它，升级把它标为 `kubernetes` 并跳过 | JWT |
 | PUT | `/api/v1/nodes/{uuid}/scheduling` | 设置 `scheduling` 为 `cordoned`、`draining` 或 `schedulable`，返回节点；非法值 400 `FIELD_INVALID`。各状态的影响见[节点调度与加速卡切换](#节点调度与加速卡切换) | JWT |
-| PATCH | `/api/v1/nodes/{uuid}/placement-policy` | 修改节点的放置策略：请求体按键给出要改的旋钮（如 `{"share_with_foreign": true}`），每个键按字典里的类型校验，未知键或类型不对返回 400 `FIELD_INVALID`（`field` 为 `placement_policy.<key>`）；返回节点。任何值都可写入，不论此刻是否生效（见节点的 `placement_policy_availability`）。节点 DTO 带 `placement_policy`（按字典的键）与 `placement_policy_availability`（`[{key, applicable, reason?}]`，`reason` 为 `NODE_PLACEMENT_POLICY_NO_PARTITION_BACKEND` 或 `NODE_PLACEMENT_POLICY_AGENT_TOO_OLD`）。见 [ADR 0068](../adr/0068-partitions-share-cards-with-foreign-processes-by-memory.md) | JWT |
 | PUT | `/api/v1/nodes/{uuid}/gpus/scheduling` | 设置一张卡是否接受新部署：`{"pcie_bdf":"0000:3f:00.0","scheduling":"stopped"}`（没有 PCI 地址的卡用 `uuid`）。`stopped` 禁用调度，`schedulable` 启用调度；两者一直有效，直到管理员手动改变，不随时间、上报或 server 重启失效。健康与平台外占用仍如实展示，未手动设置的卡仍按平台自动判定。返回节点（含卡），卡上 `scheduling_stopped`、`scheduling_allowed` 表示状态，`scheduling_actions` 给出现在可以做的操作。非法值或没点名卡 400 `FIELD_INVALID`；节点或卡不存在 404；卡已直通或没绑定驱动时设为可调度 409 `CARD_NOT_OWNED` | JWT |
 | GET | `/api/v1/nodes/{uuid}/health-checks` | 节点每张卡每项检查的当前状态，按表格给出（只读 server 内存，不触达 agent）：`checks` 是列（只含有卡适用的检查，带周期秒数），`cards[].cells[]` 是格子（`status` 为 `pass`/`warn`/`fail`/`skip`/`na`，`code` 为发现码或未检查的原因码，如 agent 启动后还没运行过为 `CARD_CHECK_NOT_RUN_YET`；`checked_at`、`duration_ms`、`stale`），`cards[].worst`（按 `fail`、`warn`、`skip`、`pass`、`na` 取最严重的）、`cards[].can_recheck` 与 `summary`（各状态格子数）由 server 计算。老 agent 上报的小写码和旧状态词由 server 读入时换成这一套。`?pcie_bdf=`（或 `uuid=`）只看一张卡。节点还没上报时 `cards` 为空、`reports` 为 false；离线时给出最后已知状态并标 `stale` | JWT |
 | GET | `/api/v1/nodes/{uuid}/health-checks/detail?pcie_bdf=&check=` | 一张卡一项检查最近一次运行的详情（`last`；`last` 是跳过时另给 `last_ran`；更早出过问题时给 `last_problem`；每次运行含 `status`、`code`、`at`、`duration_ms`、`probe` 复核命令、`evidence`），经 RPC 向 agent 取，agent 只读内存、不跑命令。同一格并发请求只发一次，答案复用 5 秒；每节点最多 2 个、全局最多 16 个在途请求，超出 429（带 `Retry-After`）。缺卡或检查名非法 400 `FIELD_INVALID`；节点离线 409 `NODE_OFFLINE`；agent 版本过旧 409 `CARD_CHECKS_UNSUPPORTED`（两者都不发 RPC） | JWT |
@@ -580,16 +580,17 @@ macOS 忽略 `no_systemd`。
 | GET | `/api/v1/images/community/repos` | 社区镜像仓库卡片（内置六类与 `image_community_catalog` 设置合并后的结果，不含 tag） | JWT |
 | GET | `/api/v1/images/community/browse` | `?repo=` 列出该仓库上游的全部 tag（任意仓库均可，不做 semver 过滤；内存缓存 1 小时）；仓库名为空或格式错误返回 400，上游报告仓库不存在返回 404 | JWT |
 | PATCH | `/api/v1/images/versions/{id}` | 修改镜像版本行：只接受 `enabled` 与 `registry_sources`（系统版本也可加获取地址）；其他键回 400 `IMAGE_VERSION_PATCH_INVALID`，镜像目录不承载启动配置（ADR 0031） | JWT(admin) |
-| GET | `/api/v1/images/{id}` | 镜像系列详情；各版本的节点行带 `node_name`、`node_state`、`image_digest_id`、`updated_at`，节点间同步来的行另带 `source_node_name`。`state` 只表示节点运行时里有没有该镜像；上一次获取的结局看 `transfer_error_code` 与 `message`：`present` 且 `transfer_error_code=IMAGE_REFETCH_FAILED` 表示强制重新获取失败、节点保留了原有镜像，`message` 是失败原因，保留到下一次获取；`PEER_TRANSFER_CANCELED` 表示节点间传输被操作员取消 | JWT |
+| GET | `/api/v1/images/{id}` | 镜像系列详情；各版本的节点行带 `node_name`、`node_state`、`image_digest_id`、`updated_at`，节点间同步来的行另带 `source_node_name`。`state` 只表示节点运行时里有没有该镜像；上一次获取的结局看 `transfer_error_code` 与 `message`：`present` 且 `transfer_error_code=IMAGE_REFETCH_FAILED` 表示强制重新获取失败、节点保留了原有镜像，`message` 是失败原因，保留到下一次获取；`PEER_TRANSFER_CANCELED` 表示节点间传输被操作员取消；`PEER_DIRECT_CONNECT_FAILED` 表示源节点连不上目标节点且未经中继，`message` 是连接错误 | JWT |
 | PATCH | `/api/v1/images/{id}` | 修改镜像系列：`enabled`；社区/自定义系列另可改 `common_args`/`common_env`（系统系列 400 `OFFICIAL_IMAGE_SERIES_MANAGED`） | JWT(admin) |
 | DELETE | `/api/v1/images/{id}` | 删除社区/自定义镜像版本；系统镜像 400 `OFFICIAL_IMAGE_DELETE_FORBIDDEN`，仍被部署、未结束的实例或模型引用时 409 `IMAGE_IN_USE`（与系统镜像删除/弃用同一引用口径） | JWT(admin) |
 | DELETE | `/api/v1/image-series/{id}` | 删除社区/自定义镜像系列；任一版本仍被引用时 409 `IMAGE_IN_USE` | JWT(admin) |
 | POST | `/api/v1/images/import` | 两种请求体：带 `schema_version` 的系统目录 manifest（schema 2/3，其他值 400），或社区/自定义添加用的 `{"series":[...]}`（不能写 `source=official`） | JWT(admin) |
 | POST | `/api/v1/images/sync` | 从发布通道更新系统镜像目录；忽略请求体，返回版本计数与系列。错误见[目录导入结果](#目录导入结果) | JWT(admin) |
-| POST | `/api/v1/images/preview-archive-url` | 下载前解析 `docker save` 归档 URL：`{"url"}` → `url`、`size_bytes`、`repo_tags`、`previewable` | JWT(admin) |
-| POST | `/api/v1/images/{id}/nodes/{uuid}/sync` | 触发节点镜像获取：空请求体按[拉取设置](../how-to/configure-pull-settings.md)拉取（与部署启动同一份候选，不能指定仓库）；`source: url` / `url-relay` 从 HTTP 归档导入；或从 `source_node` 节点间直连同步（可选 `rate_limit_kib_s`，不受同步组限制）。`source` 取 `""`、`default`、`url`、`url-relay` 以外的值回 400 `IMAGE_SOURCE_REMOVED`；来源规则让该节点无处可拉时回 409 `IMAGE_SOURCE_FORBIDDEN`；`"force":true` 时节点上已 `present` 也重新拉取 | JWT |
+| POST | `/api/v1/images/preview-archive-url` | 下载前解析 `docker save` 归档 URL：`{"url"}` → `url`、`size_bytes`、`repo_tags`、`previewable`，可选的 `metadata_by_tag` 按引用返回引擎、框架、各自版本和宿主架构 | JWT(admin) |
+| POST | `/api/v1/images/nodes/{uuid}/preview-archive-path` | 在所选节点预读本地镜像 tar，输入 `{"archive_path":"/absolute/file.tar"}`，返回 `repo_tags` 和可选的 `metadata_by_tag`，用于回填所选引用及其配置。`IMAGE_ARCHIVE_PREVIEW_FAILED` 的 `params.reason` 区分文件不存在、权限不足、文件类型错误、归档无效和超时。 | JWT(admin) |
+| POST | `/api/v1/images/{id}/nodes/{uuid}/sync` | 触发节点镜像获取：空请求体按[拉取设置](../how-to/configure-pull-settings.md)拉取（与部署启动同一份候选，不能指定仓库）；`source: url` / `url-relay` 从 HTTP 归档导入；管理员可用 `source: local` 和计算节点上的绝对路径 `archive_path` 加载本地文件，显式传 `force: true` 可替换已存在的镜像，同一节点的活动传输继续复用。节点已持有镜像时，普通本地导入返回 202、状态 `present` 且无传输 ID。节点加载启动失败返回 409 `IMAGE_ARCHIVE_LOAD_FAILED` 和分类原因 `params.reason`。路径或来源组合无效返回 400 `IMAGE_ARCHIVE_PATH_INVALID`；或从 `source_node` 节点间直连同步（可选 `rate_limit_kib_s`，不受同步组限制）。`source` 取 `""`、`default`、`url`、`url-relay`、`local` 以外的值回 400 `IMAGE_SOURCE_REMOVED`；来源规则让该节点无处可拉时回 409 `IMAGE_SOURCE_FORBIDDEN`；`"force":true` 时节点上已 `present` 也重新拉取 | JWT（本地文件需 admin） |
 | POST | `/api/v1/images/{id}/nodes/{uuid}/sync/probe` | 测试 `source_node` 到目标节点的直连握手，不传字节 | JWT |
-| POST | `/api/v1/images/{id}/nodes/{uuid}/sync/retry` | 重试节点镜像获取；节点间同步沿用记录的源节点与上次限速 | JWT |
+| POST | `/api/v1/images/{id}/nodes/{uuid}/sync/retry` | 重试节点镜像获取；节点间同步沿用记录的源节点与上次限速。重试本地导入需管理员重新提供 `source: local` 和 `archive_path`，空请求重试上次的本地文件返回 400 `IMAGE_ARCHIVE_PATH_REQUIRED` | JWT（本地文件需 admin） |
 | POST | `/api/v1/images/{id}/nodes/{uuid}/cancel` | 取消该节点上进行中的镜像传输 | JWT |
 | DELETE | `/api/v1/images/{id}/nodes/{uuid}` | 从节点删除该镜像 | JWT(admin) |
 | POST | `/api/v1/images/{id}/nodes/{uuid}/inspect` | 读取节点上镜像的 OCI 配置（`entrypoint`/`cmd`/`env`/`volumes`）与镜像 id；配置只在响应里返回，不写回目录 | JWT(admin) |
@@ -668,7 +669,7 @@ macOS 忽略 `no_systemd`。
 | GET | `/api/v1/inference-templates/chips` | 模板声明支持的静态加速卡目录；可选 `arch_id` 表示模板需要的架构 ID，其他厂商字段保持原样 | JWT |
 | GET | `/api/v1/inference-templates/my-chips` | 当前集群实际探测到的加速卡列表，含 `vendor`、`name`、可选 `cc` 和已报告的 `arch_id`；未报告架构时省略 `arch_id` | JWT |
 | GET | `/api/v1/inference-templates/summary` | 模板统计摘要 | JWT |
-| GET | `/api/v1/inference-templates/weight-models` | 某个 spec 声明的权重来源对应的已登记模型（`template_id`、`spec_source`、`spec_name` 必填，缺一 400 `TEMPLATE_WEIGHT_MODELS_QUERY_INVALID`，spec 不存在 404）：`models` 为服务任一来源的模型（按 repo id 不区分大小写匹配，完整仓库可服务子目录请求，新的在前，各一次，行格式同分页列表）；`sources` 按声明顺序列出各来源，`reuse_model_id` 是选择该来源时复用的同 provider 最新模型 | JWT |
+| GET | `/api/v1/inference-templates/weight-models` | 某个 spec 声明的权重来源对应的已登记模型（`template_id`、`spec_source`、`spec_name` 必填，缺一 400 `TEMPLATE_WEIGHT_MODELS_QUERY_INVALID`，spec 不存在 404）：`models` 为服务任一来源的模型（按 repo id 不区分大小写匹配，完整仓库可服务子目录请求，新的在前，各一次，行格式同分页列表；按 rank 拆分的来源只列 rank 0 的制品，且 revision 已知时须与来源写的一致）；`sources` 按声明顺序列出各来源，`reuse_model_id` 是选择该来源时复用的同 provider 最新模型 | JWT |
 | GET | `/api/v1/inference-templates/export/{digest}` | 按内容摘要导出可执行模板包 | JWT(admin) |
 | GET | `/api/v1/inference-templates/model/*` | 按模型路径获取模板详情。`can_delete` 表示当前调用方有权请求删除整个模板，引用检查在删除时执行。 | JWT |
 | GET | `/api/v1/inference-templates/yaml?model_id=…` | 模板编辑器里的平铺 YAML：server 用导入同一套目录类型写出，可加 `spec_source=user`（或 `upstream`）只留该来源的 spec，`readme_*` 字段只在 spec 全部列出或模板本身归用户时写出；原样保存（`import?overwrite=true`）不丢字段 | JWT |
@@ -737,7 +738,6 @@ macOS 忽略 `no_systemd`。
 | GET | `/api/v1/scheduling/timeline` | 驻留时间线：`?node=<uuid>`（可重复，至多 200 个，通常是被打开的节点）`&window=15m\|1h\|6h\|24h`（默认 6h），或自定义范围 `&since=<RFC 3339>&until=<RFC 3339>`（`until` 缺省为现在；至多 7 天；`until` 不晚于现在，容许一分钟的时钟偏差；不与 `window`、`hours` 同用）。每张卡窗口内各部署实例占用它的分段（`awake` / `asleep` / `switching` / `starting`），以及出现过的非常驻部署的统计；`?sharing=1&window=15m\|1h\|6h\|24h`（默认 6h）不带 `node`，只回答全集群出让策略不是 `never` 的部署（及窗口内参与过让位、已删除的部署）的统计（`nodes` 为空，约 30 秒缓存）；响应的 `windows` 列出这一读法可选的窗口；旧参数 `hours=6\|24` 仍可用，等同 `window=6h\|24h`；缺少 `node`（且没有 `sharing`）、`sharing` 不是 1 或与 `node` 同用、`window` 不在可选之列、`hours` 不是 6 / 24、`since` / `until` 不是 RFC 3339 时间、只有 `until` 没有 `since`、`since` 不早于 `until`、`until` 晚于现在、范围超过 7 天、`since` / `until` 与 `window` / `hours` / `sharing` 同用时 400 `FIELD_INVALID`（`params.field`，消息如 `window is one of 15m, 1h, 6h, 24h`），不存在的节点被略过；见[驻留时间线](#驻留时间线) | JWT |
 | GET | `/api/v1/scheduling/activity` | 调度活动：`?window=15m\|1h\|6h\|24h\|7d`（默认 24h）或 `?since=&until=`（RFC 3339，`until` 缺省为现在）。按服务端选定的桶长（`bucket_seconds`）给出每桶各原因的调度事件数（`buckets[].counts` 与 `reasons` 同序）、各原因在范围内的合计 `reasons[]`（`key`、`count`）、范围内切换最频繁的至多 20 张卡 `top_cards[]`（`node_uuid`、`node`、`gpu_index`、`switches`），范围开头超出统计保留期时 `beyond_retention` 为 true；不读事件日志，约 30 秒缓存；`window` 不在可选之列、与 `since` / `until` 同用、只给 `until`、时间格式不对、`until` 不晚于 `since`、范围超过 1825 天时 400 `FIELD_INVALID`（`params.field`）；见[调度活动](#调度活动) | JWT |
 | GET | `/api/v1/scheduling/yield-policies` | 出让策略字典：四个策略按等级从高到低，每个带 `defaults` 与可能适用的参数 `applies`，加只在另一个参数取某些值时才适用的条件 `applies_when`，各数值参数的范围 `bounds`（`at_most` 为不得超过的另一个参数）、`sleep_levels`、`unfinished`，客户端据此编辑，不另存默认值；见[出让策略](#出让策略) | JWT |
-| GET | `/api/v1/scheduling/node-placement-policies` | 节点放置策略的字典：`{"items": [{key, kind, default}], "total"}`，客户端据此渲染各旋钮（`kind` 目前只有 `bool`），文案按键取，不另存默认值 | JWT |
 | PUT | `/api/v1/deployments/{id}/pd` | PD 部署调整各角色副本（`roles.<role>.units`）与 `fallback`；`mode`、角色的 `tp`/`pp`、`kv_load_failure` 不可变（`PD_IMMUTABLE`）；非 PD 部署 400 `PD_NOT_PD` | JWT |
 | POST | `/api/v1/deployments/{id}/restart` | 按当前配置重建部署，重置副本重试次数；请求体可选 `strategy`（默认 `rolling`，`all` 会中断服务）；见[重启策略](#重启策略) | JWT |
 | POST | `/api/v1/evaluate` | 显存估算、调度试算与获取预估（不创建部署）：响应的 `acquisition` 含 `present`（已持有模型、目标节点读得到的存储）、`targets`（节点取模型时可保存到的存储）、`providers`（模板的权重来源）、`image`，请求指定了节点时的 `nodes[]`，以及目标节点已知时模板组件的 `components[]`（见「评估请求与获取预估」） | JWT |
@@ -1427,7 +1427,7 @@ curl --fail-with-body -sS \
 | `node_requirements` | 节点条件：`{"<key>": ["<value>", …]}`，同一键的多个值是「其中之一」，不同键「同时满足」。键可以是节点标签，也可以是系统标签（见上「节点标签」）；保留域里不是这八个系统键的一律拒绝（拼错的键不会悄悄匹配 0 台），`gpuworks.ai/vendor` 只能有一个值，网络键的值是网络 ID 或 `management`。多机与 PD 部署逐 rank 列节点，不接受 `gpuworks.ai/node`。错误 `NODE_REQUIREMENTS_INVALID`；所选节点不满足 `NODE_REQUIREMENTS_UNMET`（`params.detail` 写明哪个键） |
 | `yield_policy` | 出让策略，对象，形状同 `PUT /deployments/{id}/yield-policy` 的请求体（`policy` 加参数）；省略按 `never`。`never` 以外的策略要求 `sleepable`，策略不是 `never` 还要求单机部署，否则 400 `YIELD_POLICY_INVALID` / `SLEEP_NOT_ENABLED` / `YIELD_POLICY_SHAPE`。评估按它计算放置：按出让策略共卡的部署睡着时，对不与它共卡的部署仍按全量占用 |
 | `placement_strategy` | `spread` 或 `binpack`，随部署保存；其它值 `PLACEMENT_STRATEGY_INVALID`。没写时单机是 `spread`，多机与 PD（不论自动还是手动）是 `binpack` |
-| `placement.gpus`、`placement.tp`、`placement.pp` | 明确的物理 GPU 索引；TP、PP 是整个部署的并行度（每节点 TP × PP ÷ `nnodes` 张卡，必须整除）。多机未给 TP 时默认每节点一个流水线阶段、TP 取所选节点中最少的 GPU 数，生效值写回 placement；单机未给 TP 时由调度器按 PP 的整数倍挑卡（TP = 卡数 ÷ PP），自动放置同样按所填 TP、PP 选节点；评估在 `form_values.tp/pp` 与 `parallelism`（`tp`、`pp`、`nodes`、`gpus_per_node`）中返回；多机评估与手动放置的 `acquisition.nodes` 逐节点给出获取预估 |
+| `placement.gpus`、`placement.tp`、`placement.pp` | 明确的物理 GPU 索引；TP、PP 是整个部署的并行度（每节点 TP × PP ÷ `nnodes` 张卡，必须整除）。多机手动放置未给 TP 或 PP 时（不是正整数的 TP、PP 按未给处理），按模型和各节点当前空闲的卡试算，每节点按 1、2、4、8 张翻倍试算，再试节点的全部卡，给了 TP 时试每一个能得出该 TP 的卡数，推荐放得下的最少卡数：同样卡数优先每节点一个流水线阶段，模板有放置偏好时偏好优先，KV 估算装不下上下文的组合排在最后；没有可行组合时评估与创建都返回 `DISTRIBUTED_PARALLELISM_UNAVAILABLE`（`params.node` 为拒绝的节点，`params.reason` 为调度器原因码或 `no_layout`，`params.reason_params` 为该原因自带的参数；评估把它挂在留空的 TP 或 PP 上），不会排队等卡；模型权重大小未知时取默认值：每节点一个流水线阶段、TP 取所选节点中最少的 GPU 数。TP、PP 都给时按固定配置校验，卡暂时不够可以排队。生效值写回 placement；单机未给 TP 时由调度器按 PP 的整数倍挑卡（TP = 卡数 ÷ PP），自动放置同样按所填 TP、PP 选节点；评估在 `parallelism`（`tp`、`pp`、`nodes`、`gpus_per_node`）中返回生效值，`form_values.tp/pp` 不回显手动多机推荐的留空项；多机评估与手动放置的 `acquisition.nodes` 逐节点给出获取预估 |
 | `routing_policy` | 多副本网关策略：`least_request`（默认）、`prefix_affinity` 或 `failover`；不属于引擎启动参数 |
 | `tokenize_enabled` | 网关是否把 `/v1/tokenize`、`/v1/detokenize` 转给该部署（见 [OpenAI 兼容网关](openai-gateway.md#分词tokenize)）：省略为开启，`false` 关闭；与引擎无关，引擎不提供时由引擎自己回错 |
 | `priority_scheduling` | 引擎是否按请求优先级调度（见[请求优先级](../explanation/request-priority.md)）：省略时，最终有效的 LLM 入口及参数允许就开启，否则关闭；显式 `true` 而不允许时创建与编辑回 400，码为拒绝原因（`PRIORITY_SCHEDULING_ENGINE_UNSUPPORTED`、`PRIORITY_SCHEDULING_LAUNCH_UNSUPPORTED`、`PRIORITY_SCHEDULING_TARGET_UNVERIFIED`、`PRIORITY_SCHEDULING_PD_UNSUPPORTED` 或 `PRIORITY_SCHEDULING_POLICY_CONFLICT`，`params.field` 为 `priority_scheduling`）。编辑省略时保持原值（参数不再允许时关闭）；修改需要重建副本 |
@@ -1682,6 +1682,8 @@ extra_args 解析（`EXTRA_ARGS_INVALID`）、挂载（`MOUNT_CONTAINER_PATH`/`M
 - `unusable`：完全不接任务，原因见卡的 `schedulable`、`health_status`、`ownership`、`foreign_processes`。
 - `unknown`：节点未在线，读数是上次上报值；`available_bytes` 为 0，不计入可分配数量，已有分配与硬件健康信息仍保留。
 
+显存按台账分为 `allocated_bytes`（运行中实例占用）、`sleeping_bytes`（休眠实例的残留）、`foreign_bytes`（计入的平台外进程占用，用量未知时为 0）与 `available_bytes`（还能分配）。四者之和小于 `memory_total_bytes` 时，差额是因其它原因扣留的显存：节点在线的卡上是为平台外进程预留的余量（部署策略的 `foreign_headroom_pct` 与 `foreign_headroom_min_bytes`，都为 0 时没有差额），平台外进程用量未知或节点未在线时是整卡。
+
 `overview.health` 按 `ok`、`warning`、`error` 统计健康等级。告警卡仍可能服务；被直通或被平台外进程占用的卡也可能健康为 `ok`。
 状态随 20 秒快照刷新。
 
@@ -1776,6 +1778,8 @@ extra_args 解析（`EXTRA_ARGS_INVALID`）、挂载（`MOUNT_CONTAINER_PATH`/`M
 | PUT | `/api/v1/providers/{id}` | 更新云厂商账号 | JWT |
 | DELETE | `/api/v1/providers/{id}` | 删除云厂商账号，连同它的实例记录及该账号的 Cloud 主机发现快照缓存（同一事务，失败回滚）；不释放云上的实例和集群，已接入的节点保留；从它接入的集群条目保留，`source` 去掉、`pool_ids` 不变，此后按独立接入的集群处理（`can_apply`、`can_remove` 为 false，`operation_blocked` 为 `no_source`） | JWT |
 | POST | `/api/v1/providers/{id}/sync` | 同步该账号下的实例：列出的实例写入/更新，云端已不存在的实例行移除（关联节点保留，带外恢复置 `stopped`）；返回的 `count` 与 `instances` 同实例列表，不含托管 Kubernetes 集群的节点和 HPC 集群的计算节点；成功时把当前时间记为账号的 `synced_at`；列举失败返回 424、不改动实例行和 `synced_at` | JWT |
+| POST | `/api/v1/providers/test` | 测试一组尚未保存的凭据：`{kind, endpoint?, api_key?, public_key?, private_key?, extra?}`；以 SSE 逐项返回检查结果，测试失败仍是 200，见[云平台连接测试](#云平台连接测试)；`kind` 未注册返回 400 `PROVIDER_KIND_UNKNOWN`（`kind`） | JWT |
+| POST | `/api/v1/providers/{id}/test` | 测试已保存的账号；请求体可省略，给出时为 `{endpoint?, api_key?, public_key?, private_key?, extra?}`，非空字段只在本次测试里覆盖已保存的值（留空的密钥沿用已保存的值，规则同更新账号），不落库、不返回已保存的密钥；响应同上，见[云平台连接测试](#云平台连接测试)；账号不存在返回 404 | JWT |
 | GET | `/api/v1/providers/{id}/clusters` | 该账号下的托管 Kubernetes 集群，实时向云厂商读取、不落库：`{items:[{external_id,name,region,version,type?,type_label?,state,running,public_api,gpu_pools:[{id,name,gpu_model,gpu_count,nodes,vendor,in_entry}],entry?:{uuid,name},connectable,agent_image_source}],total}`；`connectable` 说明能否由它新建条目：集群运行中、有 GPU 节点池且还没有条目；`type` 是集群属于厂商的哪种产品（`ack_managed`、`ack_dedicated`、`ack_edge`、`ack_lingjun`、`ack_registered`、`doks`），`type_label` 是它的中英文名称，驱动分辨不出时两者都不出现；Pod 运行在虚拟节点上的集群（ACK Serverless、ACS）没有能运行 agent 的节点，不列出；`agent_image_source` 是由它建条目时默认的 agent 镜像仓库（按地域）；`entry` 是已由它建的集群条目，`in_entry` 说明该节点池是否已在条目里（DaemonSet 在它的节点上运行）；驱动没有集群能力回 501，云厂商报错回 424 | JWT |
 | GET | `/api/v1/providers/{id}/hpc-clusters` | 该账号下的 HPC 集群（阿里云 E-HPC），向云厂商读取、不落库：要逐个地域询问，连接冷时要几秒，所以 server 在内存里留着上一次读到的列表（最长 24 小时），请求立刻拿到它，`listed_at` 是那次读取的时间；列表超过 15 秒时同时在后台重新读取（每个账号同一时刻只读一次），最多等 1 秒，读完就返回新的，否则返回旧的并带 `refreshing: true`，控制台过 2 秒再取一次；还没有读过时等这次读取；`?fresh=1` 等新的读取完成（同步之后用）。与托管 Kubernetes 集群的列表（`/clusters`）并列而不合并：两者是不同的云产品，权限、字段和失败各自独立，一个读不到不影响另一个。先问 E-HPC 在哪些地域有服务（`ehpc:ListRegions`；密钥没有这个权限或调用失败时，改为逐个询问账号的每个地域），再逐个地域只在它自己的 E-HPC 地址读取 `ehpc:ListClusters`（分页读完；不借用别的地域或中心地址的答案，因为响应里没有地域，借来的集群会被记到被问的地域名下），同一个集群只列一次，每个地域各自成败，一个失败不拖垮别的：没有 E-HPC 服务的地域、账号在该地域没有开通 E-HPC 的（代码属 `NotActivated`/`NotOpen`/`NotEnabled` 一类）跳过，没有集群；个别地域失败（限流、该地域的 RAM 策略不放行、网络等）时返回其余地域的集群并标 `partial`；所有地域都失败时才整体失败。`{items:[{external_id,name,region,scheduler,scheduler_version,state,state_tone,vendor_state,running,compute_nodes?,gpu_nodes?,connectable,can_apply,unsupported_reason?,not_connectable_reason?,entry?:{uuid,name}}],total,access,permission?,code?,partial,failed_regions:[{region,code,message,permission?}]}`（地域、ID 升序）：`access` 为 `ok`、`permission_missing`（没有任何地域读得动，且都是 RAM 拒绝：`permission` 是缺的动作 `ehpc:ListClusters`，`items` 为空，不是错误）或 `not_activated`（没有任何地域读得动，账号都没开通 E-HPC：`code` 是云厂商的原话，`items` 为空）；`partial` 为 true 表示有地域没读到，它们在 `failed_regions`（`code`、`message` 是云厂商的，因 RAM 拒绝时带 `permission`），这些地域里的集群可能不在 `items` 里：集群里一个 GPU 节点都还没有、或还没同步过，照样列出；`name` 云厂商没给时是 `external_id`；`scheduler` 为小写的调度器（`slurm`、`pbs`…），`scheduler_version` 是云厂商报的版本；`state` 是集群状态的稳定代码（`uninit`、`creating`、`initing`、`pending`、`running`、`exception`、`stopping`、`stopped`、`releasing`，云厂商文档以外的词是 `unknown`），文字由客户端按语言写；`state_tone` 是状态的颜色语义（`success`、`info`、`neutral`、`danger`），`vendor_state` 是云厂商的原话，`running` 为它报告可用；`compute_nodes` 是云厂商此刻列出的该集群计算节点数（任何状态：创建中、运行中、异常；E-HPC 的 `ListClusters` `Nodes` 三项计数之和，同一次实时读取，列表没给计数时没有这个字段：数量未知，不是 0），云厂商不说其中哪些带 GPU，所以它不是 GPU 节点数；`gpu_nodes` 是上次实例同步里该集群带 GPU 的计算节点数，只在没有 `compute_nodes` 时给出（同步可能是很久以前的，实时计数优先；还没有同步列出过该集群时也没有这个字段）；`connectable` 说明能否由它新建 Slurm 条目：集群运行中、调度器是 Slurm 且还没有条目；`can_apply` 说明建好后平台能否经云账号在 Slurm 管控节点上执行 setup（驱动能在 Slurm 管控节点执行命令；集群的地域和调度器来自上次同步里它的节点，没有节点时来自这次读到的列表，整个响应只读一次云厂商，不是每个集群读一次）；`unsupported_reason` 是没有条目的集群根本不能接入的原因，现在只有 `scheduler_not_slurm`（调度器不是 Slurm），客户端据此写提示，不自己比较调度器（集群还在创建、云厂商还没给出调度器时不算）；`not_connectable_reason` 是 Slurm 集群没有条目、因为状态暂时不能接入的原因，`cluster_starting`（创建或初始化中，运行后可接入）、`cluster_pending`（待配置）、`cluster_exception`（异常，要先在 E-HPC 控制台处理）、`cluster_stopped`（已停止或停止中，要先在控制台启动）、`cluster_releasing`（释放中）或 `cluster_state_unknown`，与 `unsupported_reason` 至多给一个，调度器的原因优先；`entry` 是已由它建的 Slurm 条目。驱动没有 HPC 集群能力回 501，所有地域都失败（不是 RAM 拒绝或未开通）回 424 | JWT |
 | POST | `/api/v1/providers/{id}/instances` | 租用新实例；云厂商报错返回 424（不支持返回 501） | JWT |
@@ -1786,6 +1790,51 @@ extra_args 解析（`EXTRA_ARGS_INVALID`）、挂载（`MOUNT_CONTAINER_PATH`/`M
 | POST | `/api/v1/providers/{id}/install` | 在已租实例上安装 agent；连接参数同创建节点。需要重启 Pod 时先返回 409，显式允许后才修改；见[云实例安装与重启确认](#云实例安装与重启确认)；实例是托管 Kubernetes 集群的节点时回 409 `PROVIDER_INSTANCE_IN_CLUSTER`（`cluster`）；是 HPC 集群的计算节点时回 409 `PROVIDER_INSTANCE_IN_HPC_CLUSTER`（`cluster`；它们随集群条目接入，不逐台安装） | JWT |
 
 云厂商相关接口里，云厂商 API 或实例 SSH 出错一律返回 424 Failed Dependency，正文 `{error}` 是原因。不用 502/504：Cloudflare 等 CDN/隧道会把源站 502/504 的正文换成它自己的错误页，原因就丢了。
+
+### 云平台连接测试
+
+`POST /api/v1/providers/test` 与 `POST /api/v1/providers/{id}/test` 的响应是 SSE（`Content-Type: text/event-stream`）。
+请求本身有误（JSON 无法解析、`kind` 未注册、账号不存在）在开始推送前按普通错误返回；一旦开始推送，HTTP 状态恒为 200，测试结果在事件里。
+
+每完成一项检查推送一个 `check` 事件，全部结束后推送一个 `done` 事件：
+
+```text
+event: check
+data: {"seq":4,"name":"tcp_connect","status":"failed","duration_ms":12,"code":"PROVIDER_TCP_REFUSED","hint":"tcp_refused"}
+
+event: done
+data: {"ok":false,"failed":["tcp_connect"]}
+```
+
+- `check`：`{seq, name, status, duration_ms, code?, detail?, hint?}`。`status` 为 `ok`、`failed` 或 `skipped`；`code` 只在 `failed` 时出现，是稳定的错误码；`hint` 是给客户端选取说明文字的键；`detail` 的键随检查项而不同（见下表）。云厂商返回的原文、凭据与代理变量的值都不会出现在事件里，失败原因写入 server 日志（凭据值已替换）。
+- `done`：`{"ok":true}`；有检查失败时为 `{"ok":false,"failed":[...]}`，`failed` 按推送顺序列出失败的检查项；测试无法跑完（已保存的配置读不出、该类型的驱动未注册，或整次测试超过 2 分钟）时为 `{"ok":false,"code":"PROVIDER_TEST_UNAVAILABLE"}`。
+- 客户端断开连接即取消测试，不再推送后续事件。
+
+检查项按下表顺序执行。一项失败时，依赖它的检查项为 `skipped`，`hint` 为 `depends_failed`，`detail.depends` 是它所依赖的那一项；其余检查项照常执行。
+
+| `name` | 检查内容 | 通过时的 `detail` | 失败的 `code`（`hint`；`detail`） |
+|---|---|---|---|
+| `endpoint_format` | endpoint 是不带用户名、查询串的 http(s) 地址；留空时用该类型的默认地址 | `scheme`、`host` | `PROVIDER_ENDPOINT_INVALID`（`endpoint_empty`、`endpoint_shape`） |
+| `credentials_shape` | 该类型的必填凭据字段都已填写 | `fields`（必填字段数） | `PROVIDER_CREDENTIAL_MISSING`（`credential_missing`；`field`） |
+| `dns_resolve` | server 能解析 endpoint 的主机名 | `ips`，endpoint 本身是 IP 时另有 `literal: true` | `PROVIDER_DNS_FAILED`（`dns`；`host`） |
+| `tcp_connect` | server 能连上 endpoint 的端口 | `address`、`rtt_ms` | `PROVIDER_TCP_REFUSED`（`tcp_refused`）、`PROVIDER_TCP_UNREACHABLE`（`tcp_unreachable`）、`PROVIDER_TCP_TIMEOUT`（`tcp_timeout`） |
+| `tls_handshake` | https 的 TLS 握手与证书校验 | `server_name`、`cert_days_left`；http 为 `mode: "plain_http"` | `PROVIDER_TLS_FAILED`（`tls`） |
+| `proxy_detect` | server 进程的代理环境变量，以及访问 endpoint 是否经过代理 | `proxy: "none"`，或 `proxy: "env"`、`variables`（已设置的变量名，按字典序）、`used` | `PROVIDER_PROXY_FAILED`（`proxy`）：代理设置无法使用 |
+| `clock_skew` | endpoint 响应的 `Date` 与 server 时钟相差不超过 5 分钟 | `skew_seconds`；没有或无法解析 `Date` 时为 `date_header: "absent"` 或 `"unparseable"` | `PROVIDER_CLOCK_SKEW`（`clock_skew`；`skew_seconds`）、`PROVIDER_HTTP_UNREACHABLE`（`http`） |
+| `auth_request` | 用这组凭据向云厂商发一次校验请求 | 无；ZStack 为 `auth`、`hosts` | `PROVIDER_AUTH_FAILED`（`auth`）；ZStack 为 `ZSTACK_*` 错误码 |
+
+访问 endpoint 要经过代理时，server 需要连上的是代理：`dns_resolve` 与 `tcp_connect` 改为检查代理的地址，通过时 `detail` 为 `target: "proxy"`（`tcp_connect` 另有 `rtt_ms`），失败时为 `PROVIDER_PROXY_FAILED`（`proxy`；`target: "proxy"`）；`tls_handshake` 为 `skipped`、`hint` 为 `via_proxy`；代理拒绝连接 endpoint 时 `clock_skew` 以 `PROVIDER_PROXY_FAILED` 失败。
+
+没有 endpoint 的类型（阿里云，由驱动按地域选择地址）：`endpoint_format` 与 `dns_resolve` 到 `clock_skew` 各项为 `skipped`、`hint` 为 `not_applicable`，这种跳过不影响后面的检查项，`auth_request` 照常执行。
+
+ZStack Cloud 在 `auth_request` 之后还有四项，失败时为 `ZSTACK_*` 错误码：
+
+| `name` | 检查内容 | `detail` |
+|---|---|---|
+| `protocol_shape` | Cloud 的 GPU 查询协议属于哪一代 | `shape`（`modern`、`intermediate`、`legacy`、`gpu_query`，失败时 `unsupported`）、`allocation_field`（`present`、`absent`、`unobserved`）、`cpu_reservation_config`（`bound`、`unbound`、`unprobed`、`error`）；失败时另有 `missing` |
+| `api_endpoints` | 产品要用的只读接口是否存在 | `absent`、`denied`、`gpu_query: "pci_fallback"`（各自有才出现）；失败时为 `missing` 或 `endpoint` |
+| `read_permissions` | 产品实际会发的只读查询是否被允许 | `queries: "all"`；失败时为 `denied`（`hint` 为 `zstack_permission`）或 `query` |
+| `resource_summary` | 读到的资源数量 | `hosts`、`gpus`、`gpus_free` |
 
 ### 云实例安装与重启确认
 
@@ -1822,15 +1871,21 @@ RunPod 需要开放端口或补平台公钥时，先返回 409 `INSTANCE_RESTART
 | GET | `/api/v1/networks` | 网络列表（含加载关系、解析节点数、有提示的节点数）与角色/类型字典（`types`：`host_ethernet` / `host_rdma` / `accelerator_rdma` / `accelerator_hccs`；`type_roles`：每种类型可承担的角色）；第一项是管理网（`id` 0、`builtin: true`） | JWT |
 | POST | `/api/v1/networks` | 新建网络（名称、角色、类型、CIDR、网卡名通配）。加速器 RDMA 和加速器 HCCS 只能承担参数角色，否则返回 `NETWORK_TYPE_ROLE_INVALID` | JWT(admin) |
 | GET | `/api/v1/networks/{id}` | 网络详情：加载关系、解析到的节点（网卡/IP/HCA/提示，以及节点的用户标签 `labels`）、最近一次内部测试；`id` 0 是管理网，节点带 `roles_off`；不能修改、删除、加载（返回 404），可以发起内部测试 | JWT |
+| GET | `/api/v1/networks/{id}/search` | 搜索当前网络解析到的节点（`kind=nodes`）或配置的加载对象（`kind=attachments`）。可选的 `q` 按子串匹配，忽略大小写。查询节点时，可重复传入 `role` 和 `source`。同类条件匹配任一值，角色、来源和关键词同时生效。返回 `{"ids":[...]}`，元素分别为节点 UUID 或字符串形式的加载项 ID。未设置关键词和筛选条件时返回所选范围内全部 ID。 | JWT |
 | PATCH | `/api/v1/nodes/management-roles` | 批量修改管理网角色：`{"node_uuids":[...],"allow":[...],"deny":[...]}`，只改列出的角色，所有节点同一事务，返回 `{"updated":N}`（实际有变化的节点数）；节点不存在返回 404 `MANAGEMENT_ROLES_NODE_NOT_FOUND` | JWT(admin) |
 | PUT | `/api/v1/nodes/{uuid}/management-roles` | 设置该节点管理网不承担的角色（`{"roles_off":[...]}`），返回该节点的网络视图；只对新实例生效 | JWT(admin) |
 | PUT | `/api/v1/networks/{id}` | 修改网络 | JWT(admin) |
 | DELETE | `/api/v1/networks/{id}` | 删除网络及其加载关系与测试记录（运行中的实例不受影响） | JWT(admin) |
 | POST | `/api/v1/networks/{id}/attachments` | 加载到一个节点（可带网卡/IP/HCA 覆盖）或一个节点标签 | JWT(admin) |
 | PUT | `/api/v1/networks/{id}/attachments/{attachmentID}` | 修改节点加载的覆盖值 | JWT(admin) |
+| PUT | `/api/v1/networks/{id}/attachments/{attachmentID}/label` | 修改标签加载项的 `label_key` 与 `label_value`，保留加载项 ID 和加载时间。更新直接节点加载项返回 400，加载项不存在或属于其他网络返回 404，同一网络已加载该标签选择器返回 409 | JWT(admin) |
 | DELETE | `/api/v1/networks/{id}/attachments/{attachmentID}` | 移除加载 | JWT(admin) |
 | POST | `/api/v1/networks/{id}/tests/estimate` | 同一个请求体，不发起测试：返回解析出的节点数与节点对数；卡测试另返回 `card`（`rounds`、`probes`、最长耗时 `seconds`、上限 `max_seconds`）。发起会被拒绝的请求在这里以同样的错误被拒绝 | JWT(admin) |
 | POST | `/api/v1/networks/{id}/tests` | 发起内部测试（`kind`：tcp / rdma_tool / card_ping / card_matrix；rdma_tool 需主机 RDMA 网络，card_ping（同号加速卡互 ping）与 card_matrix（全卡矩阵）需加速器 RDMA 或加速器 HCCS 网络；HCCS 网络使用 `hccn_tool -hccs_ping`，RoCE 网络使用 `-ping`；轮数 × 3 秒超过 10 分钟时返回 `NETWORK_TEST_TOO_LONG`；`scope`：all / nodes / label；`id` 0 测管理网，只支持 tcp），返回 202 与运行记录（`node_uuids` 是被测节点，发起时固定，运行中尚无 `pairs` 时已给出）；由 controller 执行 | JWT(admin) |
+
+网络详情的 `attachments[].unresolved` 为 `true` 时，该直接加载项指定的节点未出现在本网络的有效节点中。
+
+最近一次内部测试 `latest_test.failed_count` 统计结果为失败的节点对，部分通过的节点对计入 `partial_count`。每个节点对的 `rails[].passed` 表示该链路是否通过，`rail_count` 和 `rail_passed_count` 分别是链路总数和通过数（零时省略）。加速卡测试只计入实际探测的卡对。主机 RDMA 使用通过链路的实测平均带宽 `avg_rail_gbps`，仅保存汇总带宽的历史记录没有此字段。全通节点对的带宽读数低于本次测试最快有效读数的十分之一时，服务端返回 `slow: true`。
 
 ## Settings / Network Presets
 
@@ -1861,8 +1916,8 @@ RunPod 需要开放端口或补平台公钥时，先返回 409 `INSTANCE_RESTART
 | GET | `/api/v1/updates/server/result` | 传入本次升级的 `attempt` 或已接受响应的 `backup`，核对下载、等待重启、失败或已确认回滚。无匹配证据时返回 `unknown`。 | JWT(admin) |
 | POST | `/api/v1/updates/server` | 可传入 `{channel,version,sha256,attempt}` 精确选择包。无选择时沿用渠道最新版本。下载发布包，备份并替换服务端后重启；接受返回 202 `{from,to,backup}`，下一次启动确认或回滚；见[服务端升级限制](#服务端升级限制) | JWT(admin) |
 | POST | `/api/v1/updates/server/upload` | 同上，但请求体是上传的发布压缩包（上限 512 MiB）；不是可用的发布包时 400 `SERVER_UPGRADE_ARCHIVE_INVALID`（含控制台升级之前的版本：它们不会确认或回滚自己的启动，`detail` 提示改用 `gpuworks upgrade --archive`） | JWT(admin) |
-| GET | `/api/v1/settings` | 全部设置项当前值（不含 `telemetry_export` 与 `branding`，它们只经各自的专用接口读写） | JWT |
-| PUT | `/api/v1/settings/{key}` | 修改单个设置项；`telemetry_export`、`branding`、`security` 回 400 `SETTING_HAS_OWN_ROUTE`（`security` 走 `PATCH /api/v1/security/settings`，整体替换会静默清掉请求体没提到的开关）。`deployment`（待调度超时、实例启动超时、事件保留）只有管理员可改（否则 403 `ADMINISTRATOR_REQUIRED`）：请求体叠加在当前值上，只改其中出现的键，叠加后越界回 400 `FIELD_INVALID` 且不写入 | JWT(admin) |
+| GET | `/api/v1/settings` | 全部设置项当前值（不含 `telemetry_export` 与 `branding`，它们只经各自的专用接口读写；也不含调度围栏的三个内部键） | JWT |
+| PUT | `/api/v1/settings/{key}` | 修改单个设置项；调度围栏使用的三个内部键 `scheduling.generation`、`scheduling.owner`、`scheduling.confirmation` 不能经此接口写入，回 403（其他 `scheduling.*` 键不受影响）；`telemetry_export`、`branding`、`security` 回 400 `SETTING_HAS_OWN_ROUTE`（`security` 走 `PATCH /api/v1/security/settings`，整体替换会静默清掉请求体没提到的开关）。`deployment`（待调度超时、实例启动超时、事件保留）只有管理员可改（否则 403 `ADMINISTRATOR_REQUIRED`）：请求体叠加在当前值上，只改其中出现的键，叠加后越界回 400 `FIELD_INVALID` 且不写入 | JWT(admin) |
 | GET | `/api/v1/security/settings` | 安全开关：`playground_preview_network`（试验场 HTML 预览是否允许发起网络请求，默认 `false`）与 `inference_open_access`（是否接受不带 API key 的 `/v1` 请求，默认 `false`；打开后不带 key 的请求被匿名放行，带了 key 的仍照常校验，网关读不到设置按关闭处理），见[OpenAI 兼容网关的认证](openai-gateway.md#认证)；设置读取失败时接口返回 500 `SECURITY_SETTINGS_UNAVAILABLE`，不返回伪造的默认值 | JWT |
 | PATCH | `/api/v1/security/settings` | 修改上述开关，只改 body 里出现的字段；读取现有策略失败时返回 500 `SECURITY_SETTINGS_UNAVAILABLE` 且不写入；成功响应为已提交的策略 | admin |
 | GET | `/api/v1/branding` | 品牌外观：`product_name`、`console_title`、`login_description`、`logo`（base64 `data:` URL，PNG/JPEG/WebP/SVG），四个字段总是出现，空串表示用内置默认值（默认文案由客户端按界面语言渲染）。登录页在登录前就要显示，所以不需登录 | 无 |
@@ -1921,7 +1976,7 @@ server 只有渠道版本更新时才标记 `update_available`。两份目录还
 
 在线更新检查、候选列表与安装请求使用同一排序规则，不因跨渠道而放行旧版本。两边都是正式版本号 `vX.Y.Z` 时比较版本号，否则比较构建时间；时间无法解析时沿用原有更新检测行为，将不同版本视为可更新。签名索引中的数据库迁移编号不作为在线安装门槛。上传发布包保持原有验证方式，不受这项在线排序限制。
 
-- 409 `SERVER_UPGRADE_UNAVAILABLE`：不能自升级，`reason` 为 `no_service_manager`、`not_installed`、`not_installed_binary` 或 `not_writable`。
+- 409 `SERVER_UPGRADE_UNAVAILABLE`：不能自升级，`reason` 为 `no_service_manager`、`not_installed`、`not_installed_binary`、`cluster_member`（控制面集群的成员不在控制台升级）或 `not_writable`。
 - 409 `SERVER_ALREADY_AT_RELEASE`：已是目标版本；409 `SERVER_NEWER_THAN_RELEASE`：目标构建不比当前版本更新。
 - 404 `UPDATE_NOT_PUBLISHED`：渠道没有本平台的包。
 - 502 `UPDATE_DOWNLOAD_FAILED`：无来源能提供与索引大小、SHA-256 一致的包。`file` 指出文件，`detail` 给出各源原因；不会替换运行中的服务。
@@ -1983,11 +2038,12 @@ server 只有渠道版本更新时才标记 `update_available`。两份目录还
 | GET | `/api/v1/logs/search` | 日志检索/tail（`q`、`instance` 前缀、`instances`（逗号分隔 uuid 精确匹配集合，最多 64 个，与 `instance` 互斥）、`node`、`level`、`source`、`from`/`to`、`cursor_ts`/`cursor_id`、`limit`、`with_total`；按到达序倒序分页；未指定时间边界表示该方向不限制，均未指定时查询所有尚未清理的日志；列表与总数使用同一范围，页面默认显式传最近 24h）。返回 `{"items": [{"id", "instance", "node", "level", "source", "time_ms", "line"}], "total", "total_capped", "truncated"}`（后三项按需出现） | JWT |
 | GET | `/api/v1/logs/context` | 单条命中的上下文窗口（`instance`、`ts`、`id`、`before`/`after` 取值 0–1000），等价 grep -C。返回 `{"items": [日志行], "match_index"}`；`match_index` 是锚点行在 `items` 中的下标，锚点行不在该分区时（已被保留策略清理，或 `ts` 与 `id` 不同天）为 `-1`，此时 `items` 仍是该位置附近真实存在的行，接口仍返回 200。调用方必须判 `match_index >= 0` 再取值，或只用它做比较 | JWT |
 | GET | `/api/v1/logs/histogram` | 时间桶 × 级别计数（同 search 过滤参数，含 `instances`，+ `bucket` 毫秒，1s–24h）。返回 `{"items": [{"start_ms", "counts": {"error": N, …}}], "total"}`；桶按 UTC 对齐 | JWT |
-| GET | `/api/v1/monitor/overview` | 监控中枢集群层快照（`range` ∈ `15m\|1h\|6h\|24h\|168h`，默认 `1h`，或自选时间段 `from`+`to`（见下文）；信号行（只报事实：数值、明细与近期走势，不带严重程度）、服务表（每行带该部署的 `health` 健康检查，按健康状况排序：失败、超时、无可用副本、检查中、正常、未开启，同档按名称）、`state_counts`（按服务状态计数：每种状态各一项、含 0，顺序即状态摘要的顺序）、显存条、集群 tok/s、容量事件） | JWT |
+| GET | `/api/v1/monitor/overview` | 监控中枢集群层快照（`range` ∈ `15m\|1h\|6h\|24h\|168h`，默认 `1h`，或自选时间段 `from`+`to`（见下文）；信号行（只报事实：数值、明细与近期走势，不带严重程度）、服务表（每行带 `placement`（见[服务监控返回值](#服务监控返回值)）与该部署的 `health` 健康检查，按健康状况排序：失败、超时、无可用副本、检查中、正常、未开启，同档按名称）、`state_counts`（按服务状态计数：每种状态各一项、含 0，顺序即状态摘要的顺序）、显存条、集群 tok/s、容量事件） | JWT |
 | GET | `/api/v1/monitor/deployments/{id}` | 服务监控快照；`range` 为 `15m/1h/6h/24h/168h`（默认 `1h`），也可使用 `from`+`to`。含请求、延迟、副本、`health`、供日志查询的 `log_instances`、指标来源 `sources`（engine/gateway）；PD 另有 `pd` 的降级、Prefill 统计与 `kv_transfer`。未知部署 404；已删除的部署 404 `MONITOR_DEPLOYMENT_DELETED`，`params` 含 `deployment_id`、`name`、`served_name`。见[服务监控返回值](#服务监控返回值) | JWT |
 | GET | `/api/v1/monitor/deployments/{id}/requests` | 逐请求视图：`view=live`（默认）或 `history`；`limit` 1–500（实时默认 50），可按 `key`、`instance` 筛选，历史还可按 `priority_class` 筛选。历史另支持 `range` 或成对 `from`+`to`（Unix 毫秒）、`cursor`、`min_ms/max_ms`；`results` 为 `completed/length/client_closed/interrupted/error`，多个值用逗号分隔。记录含 `result/segments/pd/trace_id`，以及 `priority_class`（网关给请求的优先级，启用前的记录和进行中的请求为空）；用 `next_cursor` 翻页。见[逐请求查询](#逐请求查询) | JWT |
 | GET | `/api/v1/monitor/requests/lookup` | 跨部署查已结束请求；`trace_id`（32 位十六进制）或 `request_id` 必须二选一。可成对传 `from`+`to`（Unix 毫秒，最多 24 小时），`limit` 1–500（默认 100）；返回 `requests/deployments/window`。未传时间时按网关 trace 时间定位或查最近 1 小时；抽样丢弃的请求查不到。见[跨部署查找请求](#跨部署查找请求) | JWT |
 | GET | `/api/v1/monitor/deployments/{id}/latency` | `range` 内完整回复的端到端延迟、阶段耗时与生成速度：`requests` 为数量，`end_to_end`、`segments` 含 `mean_ms/p50_ms/p95_ms`；`speeds` 含 `prefill_tok_s/thinking_tok_s/answering_tok_s/decode_tok_s`。不受日志抽样影响。见[延迟汇总口径](#延迟汇总口径) | JWT |
+| GET | `/api/v1/monitor/deployments/{id}/signals` | 部署详情指标面板的序列：`start`（Unix 毫秒，必填）、`end`（默认现在）、`step`（如 `30s`，可省略）。窗口不限于监控中枢的固定范围；窗口内点数超过 600 时 `step` 会被调大，实际值在 `step_ms`。返回 `{start_ms,end_ms,step_ms,sources,concurrency,kv,throughput}`，三组序列的 `labels.metric` 分别为 `running`/`waiting`、`usage_pct`、`prompt_tok_s`/`generation_tok_s`；`running`、`prompt_tokens`、`generation_tokens` 各自取引擎值，引擎没有数据时取网关值，`sources` 给出各取自谁，口径与服务监控的 `sources` 相同。引擎的序列带 `instance` 标签；网关按部署统计、不分实例，取自网关的序列不带该标签。`waiting` 与 `usage_pct` 只能由引擎提供。不缓存。`start`、`end`、`step` 非法时 400 `MONITOR_RANGE_INVALID`（`detail`）；未知或已删除的部署同服务监控 | JWT |
 | GET | `/api/v1/monitor/distributions` | `range` 内结束的请求分布：`input_output`（输入档 × 输出档）与 `uncached_ttft`（非缓存输入档 × 首 token 时间档）两个网格的 `{x, y, n}`，档位下界 `token_buckets` 与首 token 档上界 `ttft_bounds_ms`，`coverage` 给总请求数、带 usage 的数与报了缓存命中的数；`deployment` 可选，缺省为全集群，未知部署 404 | JWT |
 | GET | `/api/v1/monitor/metrics` | 指标目录，返回 `{items:[{series,name,source,kind,unit,quantiles,labels,description}],total}`。`source` 为 `engine`、`gateway`、`gpu`、`dgpu`、`node`、`network`、`kv_disk` 或 `benchmark`；推理直方图展开为分位数 gauge（`quantiles:true`）及 `_sum`、`_count`。字段口径见[推理指标词表](inference-metrics.md) | JWT |
 | GET | `/api/v1/monitor/series` | 指标浏览器（`metric` 必填，`range` ∈ `15m\|1h\|6h\|24h\|168h`，默认 `1h`，或 `from`+`to`（`step` 默认约 240 个点、取 10 秒整数倍）；`by` ∈ `node\|deployment\|instance\|gpu`，`fn` ∈ `avg\|sum\|max\|rate`，默认 `avg`；`step` 默认按 `range` 推导，且不会低于该推导值；结果超过序列/点数上限时返回 400；未知指标返回 `[]`）。带 `node` 标签的序列另带只用于显示的 `node_name`，带 `deployment` 标签的另带 `deployment_name`；节点或部署已删除时取删除时的名字，并带 `node_deleted` / `deployment_deleted` 为 `"true"`，两边都不认识的保持原样 | JWT |
@@ -1999,9 +2055,12 @@ server 只有渠道版本更新时才标记 `update_available`。两份目录还
 `GET /api/v1/monitor/deployments/{id}` 返回请求对账、首 token 拆分、图表与副本信息。
 `range` 支持 `15m`、`1h`（默认）、`6h`、`24h`、`168h`，也可使用成对的 `from`+`to`；未知部署返回 404，已删除的部署返回 404 `MONITOR_DEPLOYMENT_DELETED`（`params`：`deployment_id`、`name`、`served_name`）。
 
+- `deployment.placement`（监控中枢服务表每行的 `placement` 同形）：部署放在哪里，只报事实、不带显示文案，由界面按语言格式化。`nodes` 是节点名，按节点 rank 排序（副本逐个列出，各副本 leader 在前，每个节点只出现一次）；`nnodes` 是最宽那个副本占的节点数，单机为 1；`gpus_per_node` 是单个实例占的最多卡数；`tensor_parallel` 仅当引擎的启动命令写明张量并行度时出现（vLLM、SGLang 的 `--tensor-parallel-size`、`--tp` 等），callable 配方的并行方式平台不知道，各实例写的度数不一致（例如 PD 各角色）时同样省略，不用卡数或节点数推算。尚无实例时 `nodes` 为 `[]`，两个计数为 0。
 - `log_instances`：存活及窗口内近期停止的副本 UUID，最多 64 个，可用于 `/logs/search?instances=...`。
-- `sources`：`ttft`、`e2e`、`prompt_tokens`、`generation_tokens`、`running` 各取自 `engine` 还是 `gateway`，没有数据的信号省略。口径见[推理指标](inference-metrics.md#网关指标)。
+- `sources`：`ttft`、`e2e`、`prompt_tokens`、`generation_tokens`、`running`、`tpot`、`queue_time`、`prefill_time`、`decode_time`、`kv_hit_rate`（前缀缓存命中率，网关值只统计报了缓存命中数的请求，见[网关缓存命中率](inference-metrics.md#网关缓存命中率)）各取自 `engine` 还是 `gateway`，没有数据的信号省略。口径见[推理指标](inference-metrics.md#网关指标)。
 - `health`：同部署详情的[健康检查](#健康检查)。
+
+部署详情的指标面板不读这个接口，而是读 `GET /api/v1/monitor/deployments/{id}/signals`（见上表），逐信号取来源，因此引擎只上报部分指标（例如有运行/等待请求数和缓存使用率、没有 token 计数）时，面板的 token 吞吐来自网关，与这里的 `charts` 一致。单个实例的面板（实例详情的指标页）只显示该实例引擎自己的序列：网关不按实例统计，不会把整个部署的网关数值当作某个实例的。
 
 PD 部署另返回 `pd`：
 

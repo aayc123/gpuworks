@@ -87,6 +87,7 @@ A connector name, `kv_connector_module_path`, extra config and environment varia
 ## Consequences
 
 - To add a KV offload backend, add one row in `kvbackend` and one builder in `deploy` (with a reader when needed), with tests. Only vLLM has an offload adapter today; the tests refuse a row of another engine until that engine renders and reads it. Backend id literals must not appear in other Go code or in `ui/src`; this is enforced by the `kv_backend_id_literals` budget in `scripts/arch-constraints.txt`, with a baseline of 0.
+- The first external backend wired onto this seam is `vllm/lmcache` (`LMCacheMPConnector`, `lmcache_driven`, talking to a node-local daemon at `tcp://localhost:5555`): it targets NVIDIA and Ascend, runs within one node per instance, stays on the PD prefill role only, and supplies `"kv_connector_module_path": "vllm.distributed.kv_transfer.kv_connector.v1.multi_connector"` in its PD `wrapper` so `vllm-ascend 0.30.0`'s `AscendMultiConnector` override does not pass empty block tables on cold misses. The external LMCache daemon remains managed outside the control plane.
 - Downgrade: an older server decodes with plain JSON and drops `kv_offload_backend`.
   - A deployment that selected an external backend relaunches there with no offload.
   - An edit or draft round-trip removes the selection.
@@ -94,4 +95,8 @@ A connector name, `kv_connector_module_path`, extra config and environment varia
 - In a mixed-vendor cluster the scheduler does not filter nodes by a backend's vendor allow-list. An unsupported vendor is refused at assigned-target validation.
 - Terms: the domain glossary (`CONTEXT.md`).
 
-<!-- translation-source-sha256: 6a3a4ac8ea8427947f93fdd1e3325fafecc8ea6f13348def47f6f3a87684645c -->
+<!-- translation-source-sha256: f4b857e4c7ab16190393c8eb8265d70659da41952decd1441f0dedcad4ceeb02 # ADR 0069: KV offload backends are compiled-in, engine-scoped descriptor rows assembled at one point -->
+<!-- translation-source-sha256: 78a2a1e5f0d58f217c4eaf98157e00b72ca9950d0f440835fd25c3e66aa5a7fb ## Context -->
+<!-- translation-source-sha256: d2cb975daff3474530739fccb929057478f92e1f8bf1f1398e8dfcd0ad70ce02 ## Decision -->
+<!-- translation-source-sha256: 4f4eaabd2192e4514055d1a998b3172d39f4501e16bd2eeae6b8cd82a6c77c46 ## Trade-offs -->
+<!-- translation-source-sha256: 7e99d0dd8bcefc8a747a9186e8fba4106906f2ec35ec23553142e2fd42407e1d ## Consequences -->

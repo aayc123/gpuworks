@@ -153,6 +153,20 @@ test("renders the breadcrumb, subtitle, latency breakdown, health check, in-flig
   assert.ok(screen.getByText("5555eeee6666"));
 });
 
+test("the subtitle shows a multi-node deployment as nodes x cards in rank order, with no TP the server did not send", async () => {
+  api.monitorDeployment = async () => ({
+    ...deployment,
+    deployment: {
+      ...deployment.deployment, engine: "callable",
+      placement: { nodes: ["gb10-1", "gb10-2", "gb10-3", "gb10-4"], nnodes: 4, gpus_per_node: 1 },
+    },
+  });
+  renderPage();
+  await waitFor(() => assert.ok(screen.getByRole("heading", { name: "Qwen2.5-7B-Instruct" })));
+  assert.ok(screen.getByText(/callable · 4 nodes × 1 GPU · gb10-1, gb10-2, gb10-3, gb10-4 · /));
+  assert.equal(screen.queryByText(/TP\d/), null);
+});
+
 test("the merged log stream renders a filter chip for every replica", async () => {
   api.monitorDeployment = async () => deployment;
   api.logsSearch = async () => ({
@@ -340,6 +354,30 @@ test("a chart group with real series renders the chart instead of the not-collec
   // preemptions included) - none of the six chart cards falls back to the
   // muted placeholder.
   assert.equal(screen.queryByText("Not collected yet"), null);
+});
+
+// A deployment that has just started has one scrape per chart. Every chart is
+// drawn on the selected range's window, with the point visible, rather than on
+// the day-wide axis a lone point gets from ECharts; the kv chart stays 0..100.
+test("one scrape per chart is drawn on the selected range's window", async () => {
+  const before = Date.now();
+  const at = before - 20_000;
+  const lone = (series: Array<{ labels: Record<string, string>; points: Array<[number, number]> }>) => series.map((s) => ({ ...s, points: [[at, s.points[0][1]]] as Array<[number, number]> }));
+  const charts = Object.fromEntries(Object.entries(deployment.charts).map(([key, series]) => [key, lone(series as never)]));
+  api.monitorDeployment = async () => ({ ...deployment, charts: charts as never });
+  const { container } = renderPage("/monitor/d/102?range=15m");
+  await waitFor(() => assert.ok(screen.getByRole("heading", { name: "Qwen2.5-7B-Instruct" })));
+  const echarts = await import("echarts/core");
+  await waitFor(() => assert.ok(container.querySelectorAll("div[role=img] canvas").length >= 6));
+  const hosts = [...container.querySelectorAll<HTMLElement>("div[role=img]")].filter((host) => host.querySelector("canvas"));
+  assert.equal(hosts.length, Object.keys(charts).length);
+  const after = Date.now();
+  for (const host of hosts) {
+    const option = echarts.getInstanceByDom(host)!.getOption() as { xAxis: Array<{ min: number; max: number }>; series: Array<{ showSymbol: boolean }> };
+    assert.equal(option.xAxis[0].max - option.xAxis[0].min, 15 * 60_000);
+    assert.ok(option.xAxis[0].max >= before && option.xAxis[0].max <= after);
+    assert.ok(option.series.every((line) => line.showSymbol === true));
+  }
 });
 
 test("an invalid deployment id in the URL shows a not-found message without fetching", async () => {

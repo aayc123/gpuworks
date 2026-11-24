@@ -233,7 +233,11 @@ func (e *Engine) finishEnsure(spec proto.InstanceDesiredState) {
 			delete(e.pending, uuid)
 			e.mu.Unlock()
 			e.log.Error("instance teardown pending; resources may still be held", "uuid", uuid, "err", cleanupErr)
-			e.report(proto.InstanceStatus{UUID: uuid, State: proto.InstRemoving, Message: "teardown pending: " + cleanupErr.Error()})
+			e.reportCleanupPending(uuid, proto.RuntimeFailure{
+				Code:     runtime.TeardownFailureCode(cleanupErr),
+				Resource: containerName(uuid),
+				Detail:   cleanupErr.Error(),
+			}, "teardown pending: "+cleanupErr.Error(), nil)
 			return
 		}
 		e.releaseKVDiskDir(cleanupSpec)
@@ -417,8 +421,17 @@ func (e *Engine) startOrAdoptEpoch(ctx context.Context, spec proto.InstanceDesir
 		return
 	}
 
+	if err := e.applyPeersFile(&ws, spec); err != nil {
+		e.failLaunch(spec, err, proto.ErrorPeersFilePrepareFailed, proto.PhaseContainerPrepare, "peers file preparation failed: "+err.Error())
+		return
+	}
+
 	if err := e.applyKVDiskMount(&ws, spec); err != nil {
 		e.failLaunch(spec, err, proto.ErrorKVDiskPrepareFailed, proto.PhaseContainerPrepare, "KV disk tier preparation failed: "+err.Error())
+		return
+	}
+	if err := e.applyManagedDirMounts(&ws, spec); err != nil {
+		e.failLaunch(spec, err, proto.ErrorManagedDirPrepareFailed, proto.PhaseContainerPrepare, "managed directory preparation failed: "+err.Error())
 		return
 	}
 

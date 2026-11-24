@@ -93,7 +93,10 @@ RSS（进程驻留内存）与 CPU。
 看 nightly 的趋势，积累足够运行后再定阈值。网关用例另外断言每请求 server CPU
 （`GPUWORKS_GATEWAY_MAX_SERVER_CPU_US_PER_REQUEST`）：每请求的读库、复制之类的开销逐次累加时，
 吞吐和延迟要等到饱和才显出来，CPU 预算在每一步都能拦住。这个数与 CPU 型号有关，job 里的预算按最慢的
-runner（2.2 GHz Xeon Silver 4210）定，落在更快的 runner 上只会更低。
+runner（2.2 GHz Xeon Silver 4210）定。它还与 server 的 `GOMAXPROCS` 有关：在 192 个逻辑核、4 个 NUMA
+节点的 runner 上，server 用满全部核时每请求 CPU 是 20 个核时的 2.5 倍，吞吐相同。所以用例把 server 进程的
+`GOMAXPROCS` 固定为 20（`GPUWORKS_GATEWAY_SERVER_GOMAXPROCS`，0 表示用 server 自己的默认值），
+落在哪台 runner 上都可比，更快的 runner 只会更低。
 
 多进程形态可用预编译二进制运行，**没有 Go 工具链的机器只能这样跑**：
 
@@ -293,6 +296,10 @@ nightly）在 master 上运行，用来与 GitLab 同一提交的结果对比。
 共用的构建时间）、`GPUWORKS_ARCH_BASELINE`（`check_architecture.sh` 比较预算文件用的合并请求基线），由
 `.gitlab-ci.yml` 与 GitHub workflow 各自从自己的内置变量赋值；不设时脚本退回本地的 `git` 与当前时间。
 `check_ci_yaml.sh` 对两边的 CI 定义都做 folded 标量注释检查，stage 顺序检查只针对 `.gitlab-ci.yml`。
+
+Slurm 接入脚本在两个 CI 中都跑 `scripts/test_slurmboot_shellcheck.sh`，要求 ShellCheck 0.9.0，并强制重跑生成脚本的 POSIX 检查。GitHub 在 Ubuntu 24.04 的第一个 Go 分片执行。GitLab 的 `core-test-image` 在 Docker runner 上构建预装工具的 Go 镜像并验证；没有配置镜像的项目或 fork 也走这条检查。
+
+受保护的默认分支合入镜像构建改动后，作业用 GitLab 自带的项目容器仓库发布镜像（需要启用 Container Registry），并在日志中列出摘要。将可供 runner 拉取的完整 `仓库路径@sha256:摘要` 设置为项目 CI/CD 变量 `GPUWORKS_CORE_TEST_IMAGE` 后，`core-test` 直接用这个镜像执行检查；镜像配方变动时验证新镜像，再更新该变量。其他 Go 作业沿用原镜像。
 
 - L2/L3 与 GitLab 的 `.docker-core` 同形：每个 job 一个 DinD daemon，暴露在专用的 `gpuworks-e2e` socket
   上，suite 跑在 golang 容器里。直接用 runner VM 的 Docker 不行：VM 有 systemd，console upgrade 用例会把它

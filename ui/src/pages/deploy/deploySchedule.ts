@@ -34,21 +34,13 @@ export function scheduleText(
         ? { ...value.params, sleepers: sleepersText(t, value.params?.sleepers), gpus: listText(value.params?.gpus) }
         : code === "does_not_wait_for_yield" || code === "held_by_non_yielding"
           ? heldParams(t, value.params)
-          : value.params;
-    const translated = t(key, { ...withSettingLabel(t, params), defaultValue: "" });
+          : code === "held_outside_platform_not_allowed"
+            ? { ...value.params, gpus: listText(value.params?.gpus) }
+            : value.params;
+    const translated = t(key, { ...params, defaultValue: "" });
     if (translated && translated !== key) return translated + scheduleNote(t, value);
   }
   return value.message?.trim() || code;
-}
-
-// A reason that names a node placement policy setting (params.setting, its
-// key) reads it by the setting's own label (nodes:placementPolicy.<key>.label),
-// whichever reason and setting it is; one the client has no label for keeps
-// its key.
-function withSettingLabel(t: TFunction<"deploy">, params: Record<string, unknown> | undefined) {
-  const setting = params?.setting;
-  if (typeof setting !== "string" || !setting) return params;
-  return { ...params, settingLabel: t(`nodes:placementPolicy.${setting}.label`, { defaultValue: setting }) };
 }
 
 /**
@@ -86,6 +78,7 @@ function scheduleNote(t: TFunction<"deploy">, value: Exclude<ScheduleMessageLike
   switch (value.code) {
     case "insufficient_disk":
     case "insufficient_runtime_disk":
+    case "insufficient_managed_dir_disk":
       return diskNote(t, value);
     // A card that hosts sleeping instances offers less than its utilization
     // share, and one shared with processes outside the platform less than its
@@ -151,7 +144,10 @@ function diskNote(t: TFunction<"deploy">, value: Exclude<ScheduleMessageLike, st
 function foreignNote(t: TFunction<"deploy">, value: Exclude<ScheduleMessageLike, string>): string {
   const foreign = value.params?.foreign_gib;
   if (foreign === undefined || foreign === null || foreign === "") return "";
-  return " " + t("scheduleNote.foreign_held", { foreign_gib: foreign, foreign_headroom_gib: value.params?.foreign_headroom_gib });
+  // The server states the headroom only when the deployment policy keeps one.
+  const headroom = value.params?.foreign_headroom_gib;
+  if (headroom === undefined || headroom === null || headroom === "") return " " + t("scheduleNote.foreign_held_only", { foreign_gib: foreign });
+  return " " + t("scheduleNote.foreign_held", { foreign_gib: foreign, foreign_headroom_gib: headroom });
 }
 
 function note(t: TFunction<"deploy">, key: string, param: string, value: unknown): string {

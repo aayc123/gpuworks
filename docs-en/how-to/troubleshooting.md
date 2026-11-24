@@ -572,14 +572,19 @@ if the vendor tool just failed to return the inventory, asking it for processes 
 The platform recognizes its own instances by each card's hardware identity. An instance started by an older version, whose desired state records only device indexes,
 gets its identities filled in by a migration when the server is upgraded, and the agent also maps those indexes to cards through the latest probe, so it still counts as the platform's own.
 
-**A dGPU deployment with a memory limit can share the card with those processes, with consent**: when "Allow partitions beside processes outside the platform" (`share_with_foreign`, off by default) is on in the node's placement policy, automatic placement may use the card,
-and always tries cards without such processes first (on the node and across nodes); with it off, only picking the card yourself (in the deploy form, or `placement.gpus` in the request) puts a deployment there.
-With the switch off, automatic placement is refused with `held_outside_platform_not_allowed`, and the UI names the switch. The switch is under "Placement policy" on the node detail's overview;
-when the node has no ready partition backend or its agent is older, the switch says it has no effect yet. Switching it off stops no running instance, but re-placement (a restart, a failure replacement, scaling) follows the new setting:
+**For the card to take the platform's deployments you must consent, in one of two ways**:
+
+- **Enable scheduling on the card** (the "Scheduling" entry in the [previous section](#enabling-or-disabling-scheduling-on-a-card-by-hand)): automatic placement may then use the card, and always tries cards without such processes first (on the node and across nodes).
+  Enabling scheduling is your explicit decision about this card, and the platform no longer guards it for you: a whole-card deployment, a card whose outside use is unknown and a node whose agent is older are all placed on.
+  With an older agent, once a platform instance is on the card the agent stops reporting the outside processes that were already there, so the card reads as free and its memory may be handed out twice; upgrade the agent before enabling.
+- **Pick the card yourself when deploying** (in the deploy form, or `placement.gpus` in the request): this admits only a dGPU deployment with a memory limit, and only when every condition below holds.
+
+With neither, automatic placement is refused with `held_outside_platform_not_allowed`, which carries the node and the cards, and the UI points at "Enable scheduling" on those cards.
+When outside processes take a card after a replica was placed there and nobody enabled the card, running instances are unaffected, but re-placement (a restart, a failure replacement, scaling) is refused:
 a rolling restart waits rather than drop a replica, and a replacement after a crash goes pending. Sharing a card isolates memory only; compute and bandwidth are shared with those processes.
 A deployment is admitted by the memory left: the card's total, less what the processes hold,
 less the headroom kept beside them (5% of the card, at least 4 GiB), less what the platform's instances already claim, must cover the deployment's memory limit plus the partition overhead.
-When it does not fit, the refusal (`no_fit`) lists what the processes hold and the headroom, and in the deploy form the card can be picked only for such a deployment. The card is still not shared,
+When it does not fit, the refusal (`no_fit`) lists what the processes hold and the headroom, and in the deploy form the card can be picked only for such a deployment. A card without scheduling enabled is still not shared, even when picked,
 and is refused as “In use outside the platform”, for: a whole-card deployment; a process the vendor tool gives no memory figure for, or a card Kubernetes gave to another pod
 (what such use may grow to is not known); and a node whose agent is older—sharing needs an agent that, once a platform instance is on the card, keeps reporting the outside processes that were already there
 (each of the platform's engines keeps one process on the card, so processes beyond the number of platform instances there are foreign, including a workload restarted under a new PID or a job started beside ours; a process that exits still has its memory held back until 3 free readings in a row) until every platform instance there sleeps or has left and the card is examined in full again, and keeps that record in its state directory across restarts; an older agent drops them once the first instance starts, and the card would read as free.
@@ -1026,7 +1031,7 @@ the `POST /api/v1/evaluate` response and in `DEPLOYMENT_UNSCHEDULABLE` deploymen
 
 | Reason code | Meaning |
 |---|---|
-| `no_fit` | Fixed startup requirement per card > available GPU memory; parameters include `required_gib`, `available_gib`, `tp`, and `gpu_memory_utilization`, plus `foreign_gib` (what outside processes hold) and `foreign_headroom_gib` (the headroom kept beside them) on a card shared with processes outside the platform |
+| `no_fit` | Fixed startup requirement per card > available GPU memory; parameters include `required_gib`, `available_gib`, `tp`, and `gpu_memory_utilization`, plus `foreign_gib` (what outside processes hold) and `foreign_headroom_gib` (the headroom kept beside them; absent when the deployment policy keeps none, and adjusted under Settings › Nodes & deployments › Deployment) on a card shared with processes outside the platform |
 | `insufficient_empty_gpus` / `insufficient_shared_gpus` | Not enough idle whole cards / shareable cards |
 | `pinned_gpus_unavailable` | The cards a manually placed PD instance is pinned to are held by other deployments; the parameters give `node`, `gpus` (the pinned card indexes), and `holders` (the deployments holding them). The instance does not switch to other free cards on the node but waits for the pinned cards: stop or move the deployments holding them, or switch this deployment to automatic placement (`PUT /deployments/{id}/placement-mode`) so the platform uses free cards. When a pinned card is held outside the platform, is not healthy, or is free but still does not fit, the corresponding reason code applies |
 | `waiting_for_yield` | The replica fits once deployments sharing its cards by yield policy give them up, and waits for them; the parameters give `node`, `holders` (each holding deployment with `at_once`, or `idle_sec` and for yield-on-a-turn `max_serve_sec`: the terms it gives way to this deployment on) and `instances`. It resolves by itself when the holders sleep; see [How a New Deployment Gets onto a Shared Card](scheduling-center.md#新部署怎样放到共用的卡上). A holder with never yield is never asked to give way |
@@ -1038,12 +1043,13 @@ the `POST /api/v1/evaluate` response and in `DEPLOYMENT_UNSCHEDULABLE` deploymen
 | `no_owned_gpu` | The node has no cards available for its own use: it has none, or all are passed through to VMs, lack an available vendor driver, or are held by other drivers |
 | `gpus_held_outside_platform` | The cards themselves are healthy, but all usable cards (the named ones, when the request names cards) are occupied by processes outside the platform, and this deployment cannot share them: it takes whole cards, the outside processes' memory is unknown, or the node's agent is older |
 | `held_outside_platform_sleep` | Only cards shared with processes outside the platform could take this memory-limited deployment, but it sleeps: while those processes run, it could not be woken on that card once asleep. Fix: turn off sleep for this deployment, or pick another card |
-| `held_outside_platform_not_allowed` | Cards that could take this memory-limited deployment are used by processes outside the platform, and the node's placement policy does not allow partitions beside them; params `setting` (the switch's key), `gpus`, `count`, `node`. Also reported when the node has a clean card that is busy or too small. Fix: turn the switch on in the node's placement policy, or pick the card yourself |
+| `held_outside_platform_not_allowed` | Cards that could take this memory-limited deployment are used by processes outside the platform, and neither is scheduling enabled on those cards nor did this deployment pick them; params `gpus`, `count`, `node`. Also reported when the node has a clean card that is busy or too small. Fix: enable scheduling on those cards in the node's GPU table, or pick the card yourself |
 | `foreign_shared_gpus_used` | A plan note (not a refusal): `count` of the chosen cards are shared with processes outside the platform (up to `foreign_gib` GiB), because no clean card could take the deployment |
 | `tp_head_count_not_divisible` | The attention head count is not divisible by TP |
 | `sleep_residue_blocks_startup` | Residual GPU memory from sleeping instances blocks startup |
 | `engine_ports_exhausted` | The node's engine port range is exhausted |
 | `insufficient_disk` / `insufficient_runtime_disk` | Insufficient space on the weights disk / runtime disk |
+| `insufficient_managed_dir_disk` | The disk the node keeps managed directories on cannot hold the ceilings the template's `dirs` declare plus the disk reserve (and the weights and image when they share it); the parameters give the needed, available, declared and reserved bytes and the path; see [Managed Writable Directories](../reference/inference-catalog-spec.md#dirs-managed-writable-directories) |
 | `RUNTIME_UNAVAILABLE` / `serving_unavailable` | The node has no container runtime / no network capable of carrying serving traffic |
 | `image_source_forbidden` | The pull source rules applicable to the node leave no source from which to pull the image (parameters `node` and `image`); see [Image Pull Failures](#镜像拉取失败) |
 | `partition_unavailable` | A dGPU backend is required, but none is ready on the node; see the dGPU section |
@@ -1411,6 +1417,31 @@ If it reports `database ... does not exist`, use `--data` to specify the server'
 If the user does not exist, the command returns `not found`; first check the username and data directory. For permission errors, check the current user's access to the database.
 See [CLI](../reference/cli.md).
 
+## When the Server Hangs or Is Slow Now and Then: Stall Reports and Live Stacks
+
+**Symptom**: now and then a request takes seconds to return, or the server log has no line at all for a while, and afterwards nothing shows where it was stuck.
+
+**Stall reports (automatic)**: the server watches the places where it may wait for the disk: log writes (the log file and stderr), database statements, the begin and commit of transactions and the wait for the single writer connection (where queueing and waiting for the disk happen; in a cluster including the round trip to the database process), and writes to the metrics, log and request record stores. When one of them waits longer than 3 seconds (`log.stall_report_after`), it immediately takes every goroutine's stack in memory and stores it as a file once the disk can be written, so the evidence exists even when the log or the disk itself is what stalled:
+
+- The files are `diagnostics/stalls/stall-<UTC time>.txt` in the server's data directory; the newest 20 are kept. Two reports are at least 1 minute apart; stalls in between are only counted, and the count is written in the next report.
+- A report starts with the server version, the time it was noticed, what was waiting and for how long (`waiting:`), and the kernel's I/O pressure (`io pressure:`), followed by all stacks. If the wait reaches 30 seconds the stacks are taken once more (`still waiting at`), and a line `ended: …, after <duration>` is added when it ends. No `ended` line means the process exited before the stall was over. A wait that has not returned after 40 thresholds (2 minutes by default) is no longer watched: the report ends with `no longer watched: …, these waits never returned` and the log has `process stall no longer watched: a wait never returned`; that goroutine is still where the stacks show it. A stall that begins less than 1 minute after the previous report and is still there when the minute is up gets its stacks and its report at that moment.
+- After the stall the server log has one line `process stall recorded site=… duration=… report=…`. `process pause recorded` means the whole process was not scheduled during that time (frozen, starved of CPU, or memory reclaim); there are no stacks in that case, the file is named `stall-<time>.pause.txt`, and only a pause of at least 1 second counts. Time during which the process was not scheduled is not counted as waiting, so a freeze is not recorded a second time as a stall report. A log line carries `report=` only when the report file was actually written.
+- Writing the log does not hold up requests: the server and the agent put each record into an in-memory queue first (one for the file and one for stderr, 4096 records and 4 MiB each), and a goroutine per output writes them. While the disk stalls the log arrives late, and the goroutine a report shows stopped under `log output` is the one that writes the log. Once a queue is full new records are dropped, and when writing works again the log has one line `log records dropped: the output was not taking writes output=… dropped=… since=… for=…`. While an output is keeping up (its last write took less than 1 millisecond and at most 4 records are queued ahead), a record at `error` level or above returns only once it is written, so a crash right after an error does not lose that error. There is one such wait at a time in the whole process, 20 milliseconds at most, and no more than 40 milliseconds in a second in total; an output that is stuck or slow is not waited for again until one of its writes has been fast and left its queue empty. An `error` record that did not wait is queued like any other. Records still queued when the process is killed, or panics on another goroutine, are lost; a normal stop, a deliberate exit and collecting diagnostics wait up to 3 seconds for the queue to be written.
+- To read a report, look at `waiting:` first to see which kind of operation was stuck, then find in the stacks the goroutine stopped in that operation and the goroutines queued behind it for the same lock.
+- [Collect diagnostics](#无法登录现场时调试采集与收集诊断信息) includes the reports in the time range (`server/stalls/`).
+
+The agent watches writes to its own log file the same way (`gpuworks-agent run --stall-report-after`, 3 seconds by default, `0` turns it off); its reports are in `stalls/` under the agent state directory (`/opt/gpuworks/stalls/` by default). The agent's reports are not part of collected diagnostics; fetch them on the node when needed. Nothing is recorded when the log file cannot be opened and the agent writes to stderr only.
+
+**Live stacks (on demand)**: when the server is stuck right now and there is no report (for example it is stuck somewhere not covered above), take the current stacks on the server host. This needs no restart and does not terminate the process:
+
+```bash
+kill -USR1 "$(systemctl show -p MainPID --value gpuworks)"   # opens a loopback-only pprof listener that closes itself after 10 minutes
+grep 'pprof window open' /opt/gpuworks/server/data/logs/gpuworks-server.log | tail -n 1   # the actual address, 127.0.0.1:6060 by default
+curl -s 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=2' > goroutines.txt
+```
+
+When the server does not run under systemd, use the server process's own PID; send the signal to the server process only, because the parent process of `--supervise` exits on `USR1`. Do not use `kill -QUIT`: it terminates the process.
+
 ## When You Cannot Log In On Site: Debug Collection and Collecting Diagnostics
 
 When you cannot log in to the customer's servers, have an administrator work in **Settings → Diagnostics** and send back the downloaded archive.
@@ -1423,6 +1454,7 @@ When you cannot log in to the customer's servers, have an administrator work in 
 | `server/disk.json` | The server's data, log and backup directories and SQLite's temporary directory: their filesystems' size and free space, and the size of each entry in every directory (largest first) |
 | `server/host-identity.json` | The identity of the server's machine (system UUID, board serial, machine-id, root file system UUID), each only as a salted digest `h` and the raw value's last four characters `tail`, absent when unreadable; the salt is fixed, so one machine has the same digests in every collection; see [Extension points](../dev/extensions.md#the-management-servers-host-identity) |
 | `server/gpuworks-server.log` | The server log in the time range (info included; the Logs page has warn and above only) |
+| `server/stalls/stall-<time>.txt` | The [stall reports](#server-卡住或偶发变慢时卡顿报告与现场堆栈) in the time range, as written |
 | `nodes/<uuid>/agent.log`, `doctor.json` | The chosen nodes' (without a choice, the nodes of the chosen deployments' instances) agent logs and diagnosis reports |
 | `instances/<uuid>.log` | The chosen deployments' instance logs |
 | `debug/<session>/`, `nodes/<uuid>/debug/` | Debug collections that overlap the time range |
@@ -1452,7 +1484,69 @@ When filing an issue or asking for help, attach a [diagnostics archive](#无法�
 5. For connection issues, include the result of `GET /api/v1/agent/rejects`, the exit code of `gpuworks-agent smoke`, the deployment request body, and the network topology (whether a reverse proxy / NAT is involved).
    Remove API keys, node tokens, and other credentials before sharing.
 
-<!-- translation-source-sha256: 32e28341767a7bc4ea06327d1ae8ab2285c7d3194a874c59fe752af4bb56884e -->
+<!-- translation-source-sha256: 2895f1673de6940c226c5e3e97f1bd1bffeae4dc49ccbda79318e190fe52bfc4 # Troubleshooting Guide: Find the Cause by Symptom -->
+<!-- translation-source-sha256: 18d34156511d2cdb705c314007cf3675d2a9a9f41845a19c690c03f9028710c6 ## Where to Look First -->
+<!-- translation-source-sha256: 347b155035030c722ba005d39115f2ff028b24180aa06ebfa0b27f17976dcf65 ## Scope and Evidence of Connectivity Checks -->
+<!-- translation-source-sha256: 9114e24eb31580f67f9cf94305e5bbe6ac5d71322a090b3819a9e9ad46ebbc7e ### Node Address and Session -->
+<!-- translation-source-sha256: 184fb2451dd13860d1b0ea1e0cee5a962890feac02f6b68f290dde06f1d8f8d9 ### Streaming Requests and File Transfers -->
+<!-- translation-source-sha256: 3bc7c7048ed30ac57def9759bfcf0451f1fe02b8303d0cee71be65c485381d42 ## Node Stays Connecting or Does Not Come Online -->
+<!-- translation-source-sha256: 9bbfc75c9e814806ed623222d9fe20491062362cc3754a3a6db0bf2016ccde0e ## Kubernetes Node Does Not Join or Does Not Come Online -->
+<!-- translation-source-sha256: 5063b7bd23f4b8a1300866f0a58f968b44a51dc23d1a3535012132ec037571e2 ## Slurm Node Does Not Join or Does Not Come Online -->
+<!-- translation-source-sha256: fc8263c67b6c2225a36d30fbd133f1a560cc7ba87dbb0da987cb34f48aef0e05 ## Automatic Recovery After a Node Disconnects -->
+<!-- translation-source-sha256: f5d0d9e846c70e500b3966eb47977458ce0749b0d0b7373d0f73edb28941459f ### Check Recovery Progress -->
+<!-- translation-source-sha256: eff0f8cdc1fc6886c10dc53cd6c1f66d5c3447d6318015a3a7fa450ff2a50ed1 ### Reconnect Manually -->
+<!-- translation-source-sha256: 64e3842de1709fe48ffaf23670317d1da0b979ce090588bb8acef71a5e0de5b2 ### Resolve the Last Error -->
+<!-- translation-source-sha256: 108381a2d432f34b03b95ee5b8f83943512a95ae31ab0880187e387eee3f2e4e ### The Cloud Platform Changed the Connection Address -->
+<!-- translation-source-sha256: 4cb2a31ae8190359d18ee9d2c1bc63060937865e41802aa7e28d3140166e74cc ## GPU Not Detected or Vendor Tool Did Not Answer -->
+<!-- translation-source-sha256: 01d3dc422ad78b78fae551b18c06a077ef09938261b3e75bac1bc11c05e22052 ### GPU Count Is 0: Check Tools and Drivers First -->
+<!-- translation-source-sha256: a53303c45629885919cc151f74fd4bb036c0e159c65ca4ef4d3aadff3c10def4 ### Vendor Tool Did Not Answer or Readings Are Stale -->
+<!-- translation-source-sha256: c40739d95375b5423c001d772cdeb5770f2f8c11f507b388a3810a77b6d18f98 ### A Card Is Unusable by the Runtime or Fails Driver Initialization -->
+<!-- translation-source-sha256: 7ebf5c9174ef8583f382fdc9479446b523c3851af93fa26195569e89ad2a8a6c ### Host Sees the Card but Container Does Not -->
+<!-- translation-source-sha256: c82ecdd35a71817d12d7d211f000826eb7579542a79020dc17542ddaf09e7e33 ### Card Is Passed Through, Has an Unavailable Vendor Driver, or Is Held by Another Driver -->
+<!-- translation-source-sha256: 2488452434871c842f2ca3751373431a71deb21ec374a782d5ee32a22526ec05 ### Card Health Checks -->
+<!-- translation-source-sha256: f21b0e1066763e69c4b7a21b31d457963df4ad672a72d602f692c25d3260ec54 ### Enabling or Disabling Scheduling on a Card by Hand -->
+<!-- translation-source-sha256: ea953d23612e21c2dd6138b94e0c8e87f6b306c392842579fed602afacdcca64 ### Card Is in Use by Processes Outside the Platform -->
+<!-- translation-source-sha256: 13f5bcd92b822ca98eee304c3b8abb770dc00adaaf99922bfd175f416305b74f ### Diagnosis Finds an Unrecognized Accelerator -->
+<!-- translation-source-sha256: 4e4fcee6f19649faadd27b574a6029b4853563184f3943b86666f69048c0c995 ### Read the Diagnostic Report -->
+<!-- translation-source-sha256: 13b97b8ae33ac755d846e903ddc47768528d2a56aff80d40105d56844145d8a0 ## Accelerator Health States Such as “Reset Pending” and “Memory Fault” -->
+<!-- translation-source-sha256: ae1e7ae65061f59b3ccd96ad07ff82746825c0323d39a19b7259a60f1bb9a0dd ## Runtime Initialization Failures and Filesystems on Container Nodes -->
+<!-- translation-source-sha256: c39f990bfae3446ae07db51c1aa7e253e2cc65d35133caafa6bb63b3626f571a ### Identify the Affected Path First -->
+<!-- translation-source-sha256: 0ccb8c8d028b71eee54152777e38affca320afe31e9df7f88a7295123f3d6d28 ### Resolve the Specific Error -->
+<!-- translation-source-sha256: e48c7898544c0d6ac9049c3e73987c9e14f0830c6fd56ca8c96357d7acfe396e ### Confirm Recovery -->
+<!-- translation-source-sha256: 2d45fe0afab90ede98ea397e1ac953c12d4089f2481863616597cb05278e1d8c ## Nodes Without Docker (runveil) -->
+<!-- translation-source-sha256: 00fc38d618e1a69522bbd7408e10c3b46e5e7a4b20bcf5fbe9918a4eb0fd0efb ## Containers from Several gpuworks Installations on One Machine -->
+<!-- translation-source-sha256: 42fed8d49a7803ff38e5219e59e18fbd01e2d979874ce46b0f29cd76d6b78913 ## Model Downloads Stall, Fail, or Leave Incomplete Directories -->
+<!-- translation-source-sha256: 178536686b1efd8668c7e8d46049e9e86b9e70f96c29fb441228f7b2442ca5ff ### Check Completeness First -->
+<!-- translation-source-sha256: 5e36b7ae1509b4a6f2cc93a9978750fa40997e3697950a227a86cab9991b750b ### Choose a Resolution Based on the Error -->
+<!-- translation-source-sha256: b97e97ab10808d30ba4bc280f167cd9bb320a6be2a37f6b73e16e14d34e70152 ### Long Downloads: Check Source Switching and Resume Progress -->
+<!-- translation-source-sha256: 15199cdc0f07486d121b220a634cb7cbd7198b8935c85f1396a0eca8440eb136 ### Retry After the Fix and Confirm the Result -->
+<!-- translation-source-sha256: e0dfe8a8bfbb8a0f359c56d406e3618b4b7ea94111dbc7526470cc3e9f9a6848 ## Image Pull Failures -->
+<!-- translation-source-sha256: 99d6b5bf92e4ecb66476e5edc57763af51fdd33cdc42dca43de41335436208ad ### Identify the Failed Source First -->
+<!-- translation-source-sha256: 245924bb2ff899d48beaaf702668354fb4f077efeb4f3b231a540766744fb44f ### Sources Are Forbidden, or Retry After Changing Settings -->
+<!-- translation-source-sha256: 2e761edaeef85606c46762d1dc9680a3b996f61c30b4ae0b42ecf5b838256459 ### Why Candidates Switch and When Pulls Are Considered Stalled -->
+<!-- translation-source-sha256: 1032ac3a3086dc0bdfab0834acfa339935693f6e5b97faef8234bf02748ec5f1 ### Registry Rate Limits or Refused Connections -->
+<!-- translation-source-sha256: 28cfb7773daaae60e9e0285d967cb43b45bf53b7839887598260df0fb59f32ed ### Additional Checks for Digest References -->
+<!-- translation-source-sha256: 369d1b7a2de51ba0921773d564823cf0de7f4659fd4fbb425c0a437f65045740 ## Deployment Rejected, Insufficient Estimated GPU Memory, or No Suitable Node -->
+<!-- translation-source-sha256: b6d85798c7347370b799710bd36ca3bd36fc4830973089961d74d506bc75980b ## Instance Startup Failure, Repeated Restarts, or OOM -->
+<!-- translation-source-sha256: 71da95ca5ab9db8518ad2524787a82835f8ca14f9d5ce4d4724e240444103463 ### Find the Cause of This Failure -->
+<!-- translation-source-sha256: 2767b9a17fd44ed4e114c17cf95320e87486bc057a517077bf2be5a2b2a58bfc ### Insufficient GPU Memory or an Incorrect Startup Command -->
+<!-- translation-source-sha256: 997e7d37727b8d96961e5e818c735cfe06381a710658b695f0630ae6ebee3dab ### Distinguish the Two Startup Timeouts -->
+<!-- translation-source-sha256: 9fc0546899e8801217945461926cdfddbf92aeaebba15b22768f0392951830e5 ### Container Exits After Reaching Running -->
+<!-- translation-source-sha256: 9b440725e326934e1723979abbdb7feca7f9a96cf5fac88ee19b1482db1500e2 ### Engine Stops Responding After Reaching Running -->
+<!-- translation-source-sha256: add832ec4ab268d576c36b2fc99eba23a41a9ba25040cceb7b68ff0583f0f8ab ### Retry After Fixing the Cause -->
+<!-- translation-source-sha256: b3621e999c44b86976534c6f5899fa03638f2c06386f8221e5a7d60e2d360e79 ## Gateway Returns 401, 404, or 503 -->
+<!-- translation-source-sha256: 2c0e5a7c9e97b4735744c0fee373cf39d0326a987466dd32c03c0357bb55abe1 ## dGPU Capability Unavailable -->
+<!-- translation-source-sha256: 0e3041f49383f6df9bdad9e0f779abe9dad3c8fc082a5d108e8da5e178c515bc ## Sleep / Wake Failure -->
+<!-- translation-source-sha256: 6bed70deff3f0668d6c10fbbf64777d85d384d8c080f53cef873e0f3e0a97a34 ### Schedules, Yielding, or Waiting Did Not Run as Expected -->
+<!-- translation-source-sha256: add49c67dae68931ae57bba9b5c1b16e6d910d82dcbbdc4895b3eecf865f3738 ### Replicas Were Not Moved to Another Node After a Node Went Offline -->
+<!-- translation-source-sha256: b644afbe4321ae8504f06b77eb0b2273d535abb9bbc789682d32390b91efa3bb ## Multi-Node, NCCL, or RDMA Network Connectivity Failure -->
+<!-- translation-source-sha256: 3b9bd45c354e3073dc0f5409212c860a80f62f127a30e9819da2c6a8338d6430 ## Reverse Proxy Batches Streaming Output or Truncates Long Requests -->
+<!-- translation-source-sha256: 81e18958b5bcfae45dda667e516faaf018d2cb221db969636794a3ff6ac384e8 ## An Operation Reports "The Server Host's Disk Is Full" -->
+<!-- translation-source-sha256: b0834e1bb1b00d344ab133dd87553f7399555d48589d4f1005833f1b338f7d74 ## Forgotten Admin Password -->
+<!-- translation-source-sha256: 9666d90fa163370158e0f17f81f95d815c9d6cfc3f8d193d81cd91e32dcdeda0 ## When the Server Hangs or Is Slow Now and Then: Stall Reports and Live Stacks -->
+<!-- translation-source-sha256: 3937e7b5e3154a9cf5d7e092f90da6f978efc383086341914f85a66f6fdc9c96 ## When You Cannot Log In On Site: Debug Collection and Collecting Diagnostics -->
+<!-- translation-source-sha256: 702e2f608eecf6ecf6d04476d009d11a8cce41793fea5d7fcf3d4f71c14ee034 ## Still Unresolved? -->
 <!-- translation-localized-code-block: 5a54acf993d1267a588edaed6adb42fabe4eaa22a37d698098643916823bb39b 63b848b372a289196a7de991833e1e2e7e410a903f69538cc9e20e3119d7859f -->
 <!-- translation-localized-code-block: d383eda0730826d3b7660b307742a2629bc299ddf17052b3a12ca3f2358f47be fe0a439b8f0aa7b27bd972caa05b4ff538ca3852b599385b66339dd84b84cb6f Translate descriptive Chinese placeholders, preserving quotes, command flags, API fields, and actual paths. -->
 <!-- translation-localized-code-block: d7bedf2c39d1189b0b6bb93c618159d59d4e9db4f959892452d1c1dfdc925b9c 41cbdf89196804621a51df585f2a864cf675566f5c55b422bcfe55a4622cc6a1 Translate descriptive Chinese placeholders, preserving quotes, command flags, API fields, and actual paths. -->
+<!-- translation-localized-code-block: b8441e6b174b9aeb6dfdb8db43681e6c0644b5ccf2f59e87da139fa51efc6409 75c73e46c9ec11a61cc5b60380e696889d8c46bbec36d8e0f24857dcf039ec4f -->

@@ -371,6 +371,24 @@ for (const [index, source] of productErrorSources.entries()) {
   }
 }
 
+// DISTRIBUTED_PARALLELISM_UNAVAILABLE's params.reason is a scheduler code
+// (schedule.*) or one of the recommendation's own reasons, which the console
+// words under deploy's distributedRecommendationReason.
+const recommendationReasons = new Set(
+  [...fs.readFileSync(path.join(messagesDir, "deployment.go"), "utf8").matchAll(/\bRecommendationReason\w+\s*=\s*"([a-z0-9_]+)"/g)].map((match) => match[1]),
+);
+if (recommendationReasons.size === 0) errors.push("no recommendation reasons found");
+for (const language of languages) {
+  const deployLocale = localeMaps.get(`${language}/deploy.json`) ?? new Map();
+  for (const reason of recommendationReasons) {
+    if (!deployLocale.has(`distributedRecommendationReason.${reason}`)) errors.push(`${language}/deploy.json:distributedRecommendationReason.${reason}: missing recommendation reason translation`);
+  }
+}
+for (const key of (localeMaps.get("en/deploy.json") ?? new Map()).keys()) {
+  const reason = key.match(/^distributedRecommendationReason\.(\w+)$/)?.[1];
+  if (reason && !recommendationReasons.has(reason)) errors.push(`en/deploy.json:${key}: no matching recommendation reason`);
+}
+
 // ADR 0067: every product code a client renders has en and zh text. A product
 // code is an UPPER_SNAKE string constant declared in internal/proto or
 // internal/server/messages, or anywhere else under internal/ and pkg/ under an
@@ -541,13 +559,16 @@ for (const [file, source] of [[storageBackendPath, storageBackendSource], [bench
 // Every non-streaming REST fetch in the central API client must decode the
 // structured error envelope. This catches custom upload/import paths that do
 // not use getJSON/sendJSON.
-const apiClientPath = path.join(root, "ui/src/api.ts");
-const apiClientLines = fs.readFileSync(apiClientPath, "utf8").split("\n");
-for (const [index, line] of apiClientLines.entries()) {
-  if (!line.includes("if (!res.ok)")) continue;
-  const nearby = apiClientLines.slice(index, index + 4).join("\n");
-  if (!nearby.includes("localizedResponseError")) {
-    errors.push(`ui/src/api.ts:${index + 1}: non-streaming REST error bypasses localizedResponseError`);
+// ui/src/api.ts only re-exports; the client itself is the files under ui/src/api.
+const apiClientPaths = [path.join(root, "ui/src/api.ts"), ...filesUnder(path.join(root, "ui/src/api"), ".ts")];
+for (const apiClientPath of apiClientPaths) {
+  const apiClientLines = fs.readFileSync(apiClientPath, "utf8").split("\n");
+  for (const [index, line] of apiClientLines.entries()) {
+    if (!line.includes("if (!res.ok)")) continue;
+    const nearby = apiClientLines.slice(index, index + 4).join("\n");
+    if (!nearby.includes("localizedResponseError")) {
+      errors.push(`${path.relative(root, apiClientPath)}:${index + 1}: non-streaming REST error bypasses localizedResponseError`);
+    }
   }
 }
 

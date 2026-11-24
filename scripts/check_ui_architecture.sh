@@ -16,10 +16,20 @@ check_max() {
 }
 
 # Keep the command status: a failed audit must never look like zero findings.
-long=$(node scripts/ui_copy_audit.mjs long)
-caveat=$(node scripts/ui_copy_audit.mjs caveat)
-if ! check_max ui_copy_long_strings "$long" || ! check_max ui_copy_caveat_strings "$caveat"; then
-  node scripts/ui_copy_audit.mjs list >&2
+failed=0
+for kind in long caveat helper message sentences clauses command en inlinehelp; do
+  count=$(node scripts/ui_copy_audit.mjs "$kind")
+  key=ui_copy_${kind}_strings
+  [ "$kind" = inlinehelp ] && key=ui_copy_inline_help_refs
+  if ! check_max "$key" "$count"; then
+    node scripts/ui_copy_audit.mjs list | awk -F '\t' -v kind="$kind" '$1 == kind' >&2
+    failed=1
+  fi
+done
+[ "$failed" -eq 0 ] || exit 1
+
+if ! check_max ui_common_locale_keys "$(node scripts/ui_copy_audit.mjs commonkeys)"; then
+  echo "common.json grew: put a feature's copy in its own namespace file (ui/src/i18n/locales/<lang>/<feature>.json); common holds only words several features share" >&2
   exit 1
 fi
 

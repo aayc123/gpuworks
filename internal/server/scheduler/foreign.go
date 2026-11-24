@@ -4,7 +4,6 @@ import (
 	"slices"
 
 	"gpuworks.ai/gpuworks/internal/accelerator"
-	serverestimate "gpuworks.ai/gpuworks/internal/server/estimate"
 )
 
 // Sharing a card with processes outside the platform (ADR 0068).
@@ -35,11 +34,15 @@ func (g GPU) sharesForeignWith(req Request) bool {
 }
 
 // sharesForeignNow is whether placing on this card shares it with processes
-// outside the platform: a held card no gate withholds and that takes no
-// work otherwise. A card an operator allowed work on is not shared by this
-// rule (ADR 0068).
+// outside the platform whose memory is counted: a held card no gate
+// withholds, that a partition may share by memory or that an operator
+// enabled scheduling on. Both are avoided while a card free of such
+// processes can take the request (ADR 0068).
 func (g GPU) sharesForeignNow() bool {
-	return g.ForeignShareable && !g.Schedulable && g.withheld == 0
+	if !g.HeldOutsidePlatform || g.withheld > 0 || g.ForeignBytes <= 0 {
+		return false
+	}
+	return g.ForeignShareable || g.Schedulable
 }
 
 // foreignHold is the memory a partition may not claim because processes
@@ -48,7 +51,7 @@ func (g GPU) foreignHold() int64 {
 	if g.ForeignBytes <= 0 {
 		return 0
 	}
-	return g.ForeignBytes + serverestimate.ForeignHeadroomBytes(g.MemoryTotal)
+	return g.ForeignBytes + max(g.ForeignHeadroomBytes, 0)
 }
 
 // sleeps is whether the deployment puts its engine to sleep.

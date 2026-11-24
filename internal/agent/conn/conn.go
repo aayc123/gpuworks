@@ -47,6 +47,10 @@ type Credentials struct {
 	// Simulated is the machine a simulated node stands for, whose policy
 	// (hostsim) decides what the connection serves; nil is a real node.
 	Simulated *hostsim.Host
+	// HostSystemUUID replaces the firmware UUID the hello reports
+	// (proto.Hello.HostSystemUUID). Nil reads the real machine; hermetic
+	// agents, several of which share one test machine, supply their own.
+	HostSystemUUID func() string
 	// EnginePorts is this node's own engine port range (--engine-ports). It
 	// replaces the range a state sync carries and is reported to the server,
 	// which then allocates this node's ports from it. Nil follows the server.
@@ -254,7 +258,7 @@ func helloCapabilitiesForRuntime(prober gpu.Prober, runtimeDriver string) []stri
 		// name; the handler must provide the concrete PTY implementation.
 	}
 	caps = append(caps, proto.CapNetworkUpdate, proto.CapBench, proto.CapBenchWarmup, proto.CapBenchArrival, proto.CapBenchInteractivity, proto.CapBenchEvidence, proto.CapBenchRequestTimeout, proto.CapImagePullCandidates,
-		proto.CapStorageFiles, proto.CapCardChecks, proto.CapLaunchNameVerbatim)
+		proto.CapStorageFiles, proto.CapCardChecks, proto.CapLaunchNameVerbatim, proto.CapPeersFile)
 	if upgradeSupported() {
 		caps = append(caps, proto.CapUpgradePush)
 		if kubeboot.Running() {

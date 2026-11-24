@@ -153,8 +153,8 @@ func statesDistributedVariable(spec inferencecatalog.InferenceSpec) bool {
 		values = append(values, value)
 	}
 	for _, name := range placement.References(values...) {
-		switch name {
-		case placement.VarMasterAddr, placement.VarMasterPort, placement.VarNodeRank, placement.VarNodeAddr:
+		switch placement.Canonical(name) {
+		case placement.VarMasterAddr, placement.VarMasterPort, placement.VarNodeRank, placement.VarNodeAddr, placement.VarPeersFile:
 			return true
 		}
 	}
@@ -264,8 +264,11 @@ func builtinLaunchInput(engine deploy.Engine, vendor string, spec inferencecatal
 		ComponentMounts: mounts, ComponentModelMount: componentMount, APIContract: api,
 		TemplateShmBytes: spec.ShmBytes, TemplateMemlockUnlimited: spec.MemlockUnlimited,
 		PlacementVariables: variables,
+		// A deployment always has a served name (the model's name when the
+		// operator gives none), so a launch states it like the port.
 		Params: deploy.Params{
 			ModelPath: deploy.DefaultModelMount, APIPort: 31417, NNodes: 1, RuntimeDriver: option.runtimeDriver,
+			ServedName:   "sweep-model",
 			Host:         deploy.RuntimeBindHost(option.runtimeDriver),
 			AssignedGPUs: gpus, TensorParallel: tp, Sleepable: option.sleepable, Vendor: vendor,
 			TemplateArgs: spec.Args, TemplateEnv: spec.Env,

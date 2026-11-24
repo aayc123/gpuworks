@@ -3,12 +3,14 @@ import { Alert, Button, Card, Col, Row, Skeleton, Space, Tabs, Typography } from
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { APIError } from "../../apiError";
+import { rangeWindow } from "../../monitorRange";
 import { engineReportsNoMetrics, type MonitorDeploymentCharts } from "../../api";
 import PageHeader from "../../components/PageHeader";
 import TimeSeriesChart, { type RightAxis } from "../../components/TimeSeriesChart";
 import AsOfCaption from "./AsOfCaption";
 import InfoTitle from "./InfoTitle";
 import { serviceSeriesName } from "./monitorSeries";
+import { formatPlacement } from "./placement";
 import PdCard from "./PdCard";
 import ReplicaTable from "./ReplicaTable";
 import LatencyBreakdown from "./LatencyBreakdown";
@@ -71,7 +73,9 @@ function ServiceMonitorPageContent() {
   const lastData = useRef(data);
   if (data) lastData.current = data;
   const layoutData = data ?? lastData.current;
-
+  // The window the charts cover, taken again with each answer: a preset ends
+  // at the time it was asked, so the axis moves with the data, not the clock.
+  const chartWindow = useMemo(() => rangeWindow(range), [range, data]);
 
   if (!validId) {
     return <Alert type="error" showIcon message={t("deployment.notFound")} />;
@@ -98,6 +102,7 @@ function ServiceMonitorPageContent() {
               series={series}
               height={CHART_HEIGHT}
               group="monitor-service"
+              xRange={chartWindow}
               seriesName={seriesName}
               {...(key === "kv" ? { leftName: t("metrics.usage_pct"), yRange: PERCENT_RANGE, rightAxis: kvHitRateAxis } : {})}
             />
@@ -122,7 +127,7 @@ function ServiceMonitorPageContent() {
           data
             ? t("deployment.subtitle", {
                 engine: data.deployment.engine,
-                placement: data.deployment.placement,
+                placement: formatPlacement(t, data.deployment.placement),
                 ready: data.deployment.replicas.ready,
                 desired: data.deployment.replicas.desired,
                 id: data.deployment.id,

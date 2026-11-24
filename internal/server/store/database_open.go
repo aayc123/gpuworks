@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -30,6 +31,10 @@ type OpenOptions struct {
 	// transaction with its marker; ExtensionTables then hands out their
 	// tables. None leaves the database exactly as Open does.
 	Extensions []MigrationSet
+	// Backend is the database the runtime opens (OpenRuntimeWith,
+	// OpenExpandedRuntimeWith) run on; the zero value is SQLite. Open and
+	// OpenWith are SQLite whatever it says.
+	Backend RuntimeBackend
 }
 
 // OpenWith is Open with extension schemas.
@@ -60,6 +65,7 @@ func OpenWith(dsn string, b *bus.Bus, o OpenOptions) (result *Store, err error) 
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	watchDatabase(gdb)
 	// SQLite: one writer. Keep a small pool and enable WAL for concurrent reads.
 	sqlDB, err := gdb.DB()
 	if err != nil {
@@ -97,6 +103,7 @@ func OpenWith(dsn string, b *bus.Bus, o OpenOptions) (result *Store, err error) 
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite (read pool): %w", sqliteutil.WrapOpenError(readOnlyDSN(dsn), err))
 		}
+		watchDatabase(readGDB)
 		readSQLDB, err := readGDB.DB()
 		if err != nil {
 			return nil, err
@@ -150,8 +157,10 @@ func (s *Store) Close() error {
 		return nil
 	}
 	defer s.releaseDatabase()
+	// A replicated store has a third pool; the pools may also be shared.
+	seen := map[*sql.DB]bool{}
 	var closeErr error
-	for _, db := range []*gorm.DB{s.readDB, s.db} {
+	for _, db := range []*gorm.DB{s.schedulingDB, s.readDB, s.db} {
 		if db == nil {
 			continue
 		}
@@ -160,7 +169,16 @@ func (s *Store) Close() error {
 			closeErr = errors.Join(closeErr, err)
 			continue
 		}
-		closeErr = errors.Join(closeErr, pool.Close())
+		if !seen[pool] {
+			closeErr = errors.Join(closeErr, pool.Close())
+			seen[pool] = true
+		}
+	}
+	// The runtime lease and a replicated backend outlive the pools: nothing
+	// else may own the database until its connections are gone.
+	if s.closeBackend != nil {
+		closeErr = errors.Join(closeErr, s.closeBackend())
+		s.closeBackend = nil
 	}
 	return closeErr
 }

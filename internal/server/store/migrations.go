@@ -1350,7 +1350,7 @@ var migrations = []migration{
 	{Version: 216, Name: "node_last_recovery_code", Apply: addNodeLastRecoveryCode},
 	{Version: 217, Name: "check_codes_upper_snake", Apply: upperCaseCheckCodes},
 	{Version: 218, Name: "node_runtime_fallback_socket", Apply: addNodeRuntimeFallbackSocket},
-	{Version: 219, Name: "node_placement_policy", Apply: addNodePlacementPolicy},
+	{Version: 219, Name: "node_placement_policy", Apply: func(*gorm.DB) error { return nil }}, // retired: dropped by 246
 	{Version: 220, Name: "inference_spec_pd_roles_manual_command_docker_args", Apply: addInferenceSpecPDRolesManualCommandAndDockerArgs},
 	{Version: 221, Name: "node_host_system_uuid", Apply: addNodeHostSystemUUID},
 	{Version: 222, Name: "plugin_trust", Apply: addPluginTrustTables},
@@ -1362,6 +1362,24 @@ var migrations = []migration{
 	{Version: 228, Name: "slurm_clusters", Apply: createSlurmClusters},
 	{Version: 229, Name: "storage_node_shared_fs", Apply: addStorageNodeSharedFS},
 	{Version: 230, Name: "inference_spec_start_timeout", Apply: addInferenceSpecStartTimeout},
+	{Version: 231, Name: "inference_spec_dirs", Apply: addInferenceSpecDirs},
+	// Cluster ledger. These versions belong to this tree only. The older
+	// control-plane branch used lower numbers that this schema already spent.
+	{Version: 232, Name: "cluster_admission", Apply: migrateClusterAdmission},
+	{Version: 233, Name: "cluster_material_grants", Apply: migrateClusterMaterialGrants},
+	{Version: 234, Name: "cluster_authorizations", Apply: migrateClusterAuthorizations},
+	{Version: 235, Name: "cluster_enrollment_origins", Apply: migrateClusterEnrollmentOrigins},
+	{Version: 236, Name: "cluster_invitation_origin", Apply: migrateClusterInvitationOrigin},
+	{Version: 237, Name: "material_replicas", Apply: migrateMaterialReplicas},
+	{Version: 238, Name: "material_remote_receipts", Apply: migrateMaterialRemoteReceipts},
+	{Version: 239, Name: "material_manifests", Apply: migrateMaterialManifests},
+	{Version: 240, Name: "committed_notifications", Apply: migrateCommittedNotifications},
+	{Version: 241, Name: "notification_topic_resource", Apply: migrateNotificationTopicResource},
+	{Version: 242, Name: "committed_notification_revision", Apply: migrateNotificationRevision},
+	{Version: 243, Name: "maintenance_phase", Apply: migrateMaintenancePhase},
+	{Version: 244, Name: "maintenance_resume_open", Apply: migrateMaintenanceResumeOpen},
+	{Version: 245, Name: "catalog_gc_barrier", Apply: migrateCatalogGCBarrier},
+	{Version: 246, Name: "drop_node_placement_policy", Apply: dropNodePlacementPolicy},
 }
 
 // modelFileNetworkColumns are the columns migrations 76 and 77 added to
