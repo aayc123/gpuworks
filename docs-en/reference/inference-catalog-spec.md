@@ -397,7 +397,12 @@ placement:
 ```
 
 - You must define `resolve(gpu)`. `gpu` is a struct with `count`, `vendor`, `names`,
-  `memories_gib`, `min_memory_gib`, `indexes`, and `automatic`.
+  `memories_gib`, `min_memory_gib`, `indexes`, `automatic`, and `nnodes`.
+- `gpu` describes the cards **one node** gives the instance. A multi-node instance calls the resolver
+  once per rank, node by node, and each call sees only that node's cards: with two nodes contributing one card
+  each, every rank's `gpu.count` is 1. `gpu.nnodes` is the number of nodes the whole instance spans (1 on a
+  single node). A profile whose constraint covers the whole instance must check it too; a single-GPU profile writes
+  `if gpu.count != 1 or gpu.nnodes != 1: return reject(...)`, because `gpu.count != 1` alone lets a multi-GPU group across nodes through.
 - There are only two predeclared built-ins: `accept(gpu_memory_mib_per_device, variables?, prefer?)` and
   `reject(reason)`. `gpu_memory_mib_per_device` is an **admission requirement** (1..16777216 MiB;
   the upper limit only prevents int64 overflow), not an allocation request.
@@ -409,7 +414,7 @@ placement:
   `accept(..., prefer=gpu.count)` to select 8 GPUs on a node with 8 idle GPUs, while still selecting 4 when only 4 are idle.
   `prefer` affects only automatic GPU count selection: when the user specifies parallelism or GPU indexes, the candidate count is already fixed, and `prefer`
   does not change it. A nonzero `prefer` appears in the scheduling explanation as a `placement_preference` reason.
-  `prefer=gpu.count` is permitted bounded arithmetic (`gpu.count`, `gpu.min_memory_gib`, and literals).
+  `prefer=gpu.count` is permitted bounded arithmetic (`gpu.count`, `gpu.nnodes`, `gpu.min_memory_gib`, and literals).
 - Evaluation is deterministic and performs no I/O: `load`/import is prohibited, and `print` is a no-op. Limits: source
   ≤ 32 KiB, ≤ 100k steps, ≤ 30s wall-clock time (only a fallback; the deterministic limit is the step count), ≤ 64 result variables /
   ≤ 4096 bytes of total string content.
@@ -718,7 +723,7 @@ Warnings do not block import. A successful import response includes the same `wa
 - The image catalog (system image manifest) is a separate domain. For the format, see
   [Image Catalog and Inference Image Families](image-families.md#manifest-格式).
 
-<!-- translation-source-sha256: 3edf69606107c703a4551731f33072c5869a8fbcaa0d3d4f40377abfcaab6cd5 -->
+<!-- translation-source-sha256: 1ecdbce61f67680fac8c279cf9cd01ca275543dbadb3cbf78cc680f9c29d968b -->
 <!-- translation-localized-code-block: a580200df2b28bc011bb736a64288086932955375e5ae8897762ee97bd667e26 8e0792250b6c0eb3ec0dad5bfca28308dc0b1afeb27e9c33bb24ddb21e20ba07 -->
 <!-- translation-localized-code-block: 9a54a7271e193f98f78581cbb5fb446f8d5d1aa46c942d8f4fb3536f5f81b115 22ec1397368cfc809b65ad278feb838b5690c611dd587bc022c6e151b5596d99 Translate YAML comments and illustrative user-facing reason text. -->
 <!-- translation-localized-code-block: 06db934de28e923689ee3d7a5291cfb9c5c39413ce9a4c3a87dfc3b0d6dc051d 213afdd99d9dc95fee88560f64a09e012578484b424f46c160ffd92f44b8bd72 Translate YAML comments and illustrative user-facing reason text. -->

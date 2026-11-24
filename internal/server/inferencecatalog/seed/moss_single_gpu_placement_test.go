@@ -2,6 +2,7 @@ package seed
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"gpuworks.ai/gpuworks/internal/proto"
 	"gpuworks.ai/gpuworks/internal/server/bus"
 	"gpuworks.ai/gpuworks/internal/server/deploy"
+	"gpuworks.ai/gpuworks/internal/server/parallelism"
 	"gpuworks.ai/gpuworks/internal/server/planning"
 	"gpuworks.ai/gpuworks/internal/server/scheduler"
 	"gpuworks.ai/gpuworks/internal/server/store"
@@ -54,7 +56,7 @@ func TestMossDelaySpecsAreScheduledOnOneGPU(t *testing.T) {
 				continue
 			}
 			t.Run(modelID+"/"+tc.name, func(t *testing.T) {
-				out := mossEvaluate(t, st, modelID, tc.cardsGiB, tc.selected)
+				out := mossEvaluate(t, st, modelID, tc.cardsGiB, tc.selected, parallelism.Spec{})
 				if tc.wantGPUs == nil {
 					if out.Result.OK {
 						t.Fatalf("admitted on %v GiB with plan %+v, want a refusal", tc.cardsGiB, out.Result.Plan)
@@ -80,7 +82,53 @@ func TestMossDelaySpecsAreScheduledOnOneGPU(t *testing.T) {
 	}
 }
 
-func mossEvaluate(t *testing.T, st *store.Store, modelID string, cardsGiB []int64, selected []int) planning.Output {
+// A multi-node instance is planned rank by rank, each rank on its own node's
+// cards, so two nodes with a card apiece show the resolver one card twice. The
+// launch is still --tensor-parallel-size 2 (or two pipeline stages) over two
+// devices, which stage 0 cannot run: every rank must be refused by the
+// single-GPU contract, on cards large enough that memory is not the reason.
+func TestMossDelaySpecsAreRefusedAcrossNodes(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "moss.db"), bus.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	cases := []struct {
+		name     string
+		parallel parallelism.Spec
+	}{
+		{"tensor parallel 2 over two nodes", parallelism.Spec{TP: 2, NNodes: 2}},
+		{"pipeline parallel 2 over two nodes", parallelism.Spec{TP: 1, PP: 2, NNodes: 2}},
+		{"data parallel 2 over two nodes", parallelism.Spec{TP: 1, DP: 2, NNodes: 2}},
+	}
+	for _, modelID := range []string{"openmoss-team/moss-tts", "openmoss-team/moss-soundeffect", "openmoss-team/moss-voicegenerator"} {
+		for _, tc := range cases {
+			// 24 GiB is the card the pairing was reported on; one H20-3e runs
+			// any of the three models alone.
+			for _, cardGiB := range []int64{24, 141} {
+				t.Run(fmt.Sprintf("%s/%s/%d GiB", modelID, tc.name, cardGiB), func(t *testing.T) {
+					// The rank's node has one card, as each node of the group does.
+					out := mossEvaluate(t, st, modelID, []int64{cardGiB}, nil, tc.parallel)
+					if out.Result.OK {
+						t.Fatalf("a rank of %+v was admitted with plan %+v, want a refusal", tc.parallel, out.Result.Plan)
+					}
+					if out.Result.Message.Code != scheduler.ReasonPlacementRejected {
+						t.Fatalf("refused for %+v, want the single-GPU contract to refuse it", out.Result.Message)
+					}
+				})
+			}
+		}
+		t.Run(modelID+"/one H20-3e on one node", func(t *testing.T) {
+			out := mossEvaluate(t, st, modelID, []int64{141}, nil, parallelism.Spec{TP: 1, NNodes: 1})
+			if !out.Result.OK || out.PlacementError != nil {
+				t.Fatalf("refused: %+v; placement error=%v", out.Result.Message, out.PlacementError)
+			}
+		})
+	}
+}
+
+func mossEvaluate(t *testing.T, st *store.Store, modelID string, cardsGiB []int64, selected []int, parallel parallelism.Spec) planning.Output {
 	t.Helper()
 	model, spec := catalogSpec(t, modelID, "bf16-vllm-nvidia-general")
 	meta, err := json.Marshal(model.ModelConfig)
@@ -116,6 +164,6 @@ func mossEvaluate(t *testing.T, st *store.Store, modelID string, cardsGiB []int6
 	return (planning.Input{
 		Model: &store.Model{Name: model.ModelID, Meta: string(meta), WeightBytes: spec.WeightBytes},
 		Node:  node, Engine: spec.Engine, Quick: materialized.Quick, GPUIndexes: selected,
-		ComponentWeightBytes: componentBytes, PlacementResolver: resolver,
+		ComponentWeightBytes: componentBytes, PlacementResolver: resolver, Parallel: parallel,
 	}).Evaluate(st)
 }

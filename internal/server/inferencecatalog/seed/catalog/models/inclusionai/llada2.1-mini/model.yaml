@@ -38,27 +38,33 @@ specs:
   - --attention-backend
   - flashinfer
   # Decode CUDA graph stays on, capped at batch 8; prefill graph capture is
-  # disabled because enabling it OOMs on this model (issue #35).
-  # Verified on SGLang 0.5.21 (runner cuda13.0-sglang0.5.21-r2), 2x RTX 3090,
-  # TP2, with the JIT grouped-top-k router above, 2026-11-19.
+  # disabled because it does not fit beside the KV pool on 24 GiB cards, which
+  # this profile (cc >= 8.0) also serves (issue #35). Both are memory limits,
+  # not a model incompatibility. Runner cuda13.0-sglang0.5.21-r2 (SGLang
+  # 0.5.21), TP2, --mem-fraction-static 0.88, JIT grouped-top-k router above.
   #
-  # Prefill graph: must stay disabled. With --cuda-graph-backend-prefill left
-  # unset (default breakable backend), capture OOMs on the 17th of 50 token
-  # buckets (num_tokens=704) inside graph.capture_end() with
-  # "CUDA error: out of memory". At --mem-fraction-static=0.88 only ~2.27 GiB
-  # remains per GPU after KV cache allocation (~1.84 GiB at capture begin).
-  # The visible "num_active_captures_ > 0 INTERNAL ASSERT FAILED" is a secondary
-  # assertion raised after the first capture_end() already failed; treat the
-  # OOM as the root cause, not the assert. 2/2 reproductions on 2026-11-19.
-  # Re-check after an SGLang/torch bump: launch once without
+  # Prefill graph (default backend: breakable), with
+  # --cuda-graph-backend-prefill left unset:
+  # - 2x RTX 3090, 2026-11-19: about 2.27 GiB per GPU is left after the KV
+  #   pool (1.84 GiB at capture begin). Capture fails on the 17th of 50 token
+  #   buckets (num_tokens=704) inside graph.capture_end() with
+  #   "CUDA error: out of memory"; 2 of 2 launches exited. The
+  #   "num_active_captures_ > 0 INTERNAL ASSERT FAILED" printed after it is
+  #   raised once capture_end() has already failed; the OOM is the cause.
+  # - 2x H20-3e, 2026-11-24: 16.12 GiB per GPU is left after the KV pool. All
+  #   58 buckets capture, keeping 1.24 GiB, and the server answers; 2 of 2
+  #   launches. With --mem-fraction-static 0.98 (2.21 GiB left, 1.41 GiB at
+  #   capture begin) the first bucket (num_tokens=8192) fails with
+  #   torch.OutOfMemoryError; 1 of 1.
+  # Re-check after an SGLang/torch bump on a 24 GiB card: launch once without
   # --cuda-graph-backend-prefill disabled.
   #
-  # Decode graph: kept on to avoid the per-step launch overhead, but capped at
-  # batch 8 (--cuda-graph-max-bs-decode=8) because uncapped capture is too
-  # large on this model/GPU (issue #35). Do not re-add --disable-cuda-graph:
-  # it is a global switch and would also turn off the decode graph, making the
-  # two flags below no-ops. Re-check before raising the cap or enabling prefill
-  # capture.
+  # Decode graph: capped with --cuda-graph-max-bs-decode 8, which captures in
+  # 0.58 GiB. Uncapped, capture covers batch sizes up to 256 and runs out of
+  # memory at bs=248 with 15.35 GiB free at capture begin (2x H20-3e,
+  # 2026-11-24, 1 of 1). Do not re-add --disable-cuda-graph: it resolves the
+  # decode backend to disabled as well, so the two flags below would do
+  # nothing (checked on the same runner). Re-check before raising the cap.
   - --cuda-graph-backend-prefill
   - disabled
   - --cuda-graph-max-bs-decode
