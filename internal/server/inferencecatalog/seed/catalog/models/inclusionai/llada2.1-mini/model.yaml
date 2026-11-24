@@ -69,6 +69,15 @@ specs:
   - disabled
   - --cuda-graph-max-bs-decode
   - '8'
+  performance_tradeoffs:
+  - param: --cuda-graph-backend-prefill
+    reason: memory_fit
+    detail_en: "Prefill graph capture does not fit beside the KV pool on a 24 GiB card: on 2x RTX 3090 (SGLang 0.5.21, TP2, about 2.27 GiB left per GPU) 2 of 2 launches ran out of memory during capture. On 2x H20-3e with 16.12 GiB left per GPU it captures in 1.24 GiB and serves."
+    detail_zh: "prefill 图捕获在 24 GiB 卡上放不进 KV 池之外的余量：2 张 RTX 3090（SGLang 0.5.21，TP2，每卡约剩 2.27 GiB）上 2/2 在捕获时显存不足退出。2 张 H20-3e 每卡剩 16.12 GiB 时可以捕获（占 1.24 GiB）并正常服务。"
+  - param: --cuda-graph-max-bs-decode
+    reason: memory_fit
+    detail_en: "Uncapped decode graph capture covers batch sizes up to 256 and ran out of memory at batch 248 on 2x H20-3e with 15.35 GiB free per GPU (SGLang 0.5.21, TP2). Capped at 8 it captures in 0.58 GiB."
+    detail_zh: "decode 图不设上限时要捕获到批大小 256，在 2 张 H20-3e 上（SGLang 0.5.21，TP2，每卡余量 15.35 GiB）捕获到批大小 248 时显存不足。上限设为 8 时捕获只占 0.58 GiB。"
   api:
     health_endpoint: /health
     operations:

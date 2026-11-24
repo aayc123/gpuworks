@@ -711,7 +711,7 @@ dirs:
 | `overlap_schedule_disabled` | — | `--disable-overlap-schedule` | 必须说明 |
 | `prefill_batch_small` | `--max-num-batched-tokens` < 2048 | `--chunked-prefill-size` < 2048 | 只提示 |
 | `kv_memory_reduced` | `--gpu-memory-utilization` < 0.8 | `--mem-fraction-static` < 0.7 | 只提示 |
-| `graph_capture_narrow` | `cudagraph_mode: FULL_DECODE_ONLY`、`cudagraph_capture_sizes` 最大值 < 16 | `--cuda-graph-max-bs` < 16 | 只提示 |
+| `graph_capture_narrow` | `cudagraph_mode: FULL_DECODE_ONLY`、`cudagraph_capture_sizes` 最大值 < 16 | `--cuda-graph-max-bs`、`--cuda-graph-max-bs-decode` < 16，`--cuda-graph-backend-prefill disabled` | 只提示 |
 | `kernel_fallback` | `--attention-backend TRITON_ATTN`，环境变量 `VLLM_USE_DEEP_GEMM=0` 等关掉快速内核的开关 | — | 只提示 |
 
 登记表读 `args`、`env`，以及 `entrypoint`、`pre_start_argv`、`manual_command` 里按 shell 引号规则切开的参数：引号里带空格的 JSON 值算一个值，`sh -c '…'` 里的命令逐词读。每个输入单独读，写在两个输入里的 `--compilation-config` 不合并。vLLM 的下划线写法（`--max_num_seqs`）等同连字符写法，报出的 `param` 是连字符形式。`--compilation-config` 的 `backend: eager` 只是 torch.compile 的后端，不关图回放，不算 `graph_disabled`。

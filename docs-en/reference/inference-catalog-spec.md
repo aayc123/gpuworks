@@ -709,7 +709,7 @@ Some settings let an engine run on a given piece of hardware or a given model at
 | `overlap_schedule_disabled` | — | `--disable-overlap-schedule` | Must be explained |
 | `prefill_batch_small` | `--max-num-batched-tokens` < 2048 | `--chunked-prefill-size` < 2048 | Shown only |
 | `kv_memory_reduced` | `--gpu-memory-utilization` < 0.8 | `--mem-fraction-static` < 0.7 | Shown only |
-| `graph_capture_narrow` | `cudagraph_mode: FULL_DECODE_ONLY`, largest `cudagraph_capture_sizes` entry < 16 | `--cuda-graph-max-bs` < 16 | Shown only |
+| `graph_capture_narrow` | `cudagraph_mode: FULL_DECODE_ONLY`, largest `cudagraph_capture_sizes` entry < 16 | `--cuda-graph-max-bs` or `--cuda-graph-max-bs-decode` < 16, `--cuda-graph-backend-prefill disabled` | Shown only |
 | `kernel_fallback` | `--attention-backend TRITON_ATTN`, environment switches that turn a fast kernel off such as `VLLM_USE_DEEP_GEMM=0` | — | Shown only |
 
 The registry reads `args`, `env`, and the flags in `entrypoint`, `pre_start_argv` and `manual_command` split by shell quoting rules: a quoted JSON value with spaces is one value, and the command inside `sh -c '…'` is read word by word. Each input is read on its own, so a `--compilation-config` written across two inputs is not merged. vLLM's underscore spelling (`--max_num_seqs`) counts as the dashed one, and the reported `param` is the dashed form. `backend: eager` in `--compilation-config` is only the torch.compile backend; it does not stop graph replay and is not `graph_disabled`.
@@ -804,7 +804,7 @@ Warnings do not block import. A successful import response includes the same `wa
 <!-- translation-source-sha256: c43a7f1c915e00849d832b88aa1423056a03dc492634a4d24793ca3c94807e8d ### api.request_stats: Per-Request Statistics in Responses -->
 <!-- translation-source-sha256: f2dcc459ab368caf6601fff2c116fb06cdf6f4c7e4b03395844423906e1a87c6 ## components: Multiple Weight Sets -->
 <!-- translation-source-sha256: 5ffa7b32ad221104b1942267515674a5d244169f2e115e30796d882f6ccf52d0 ## dirs: Managed Writable Directories -->
-<!-- translation-source-sha256: d8159910bf55c76c4d66346dec46c313fadab1bd4cc0c20d7d069416a37908d4 ## performance_tradeoffs: Reasons for Performance-Costing Settings -->
+<!-- translation-source-sha256: 7620f9348a37aef34bcf86161854f38f331c06682ad4a107b572bec32258b27f ## performance_tradeoffs: Reasons for Performance-Costing Settings -->
 <!-- translation-source-sha256: 2ebe9bf5d43fdc1e745261f42679fd5503d1e94c1c37aaa7ffffdc4a46edbf40 ## Pre-Import Checks and Warnings -->
 <!-- translation-source-sha256: 439b1bcae33f36e507bd1217f4552947335ee6d22d0072b928a34e3ba1fbd9ac ## Validation Entry Points and Tools -->
 <!-- translation-localized-code-block: a580200df2b28bc011bb736a64288086932955375e5ae8897762ee97bd667e26 8e0792250b6c0eb3ec0dad5bfca28308dc0b1afeb27e9c33bb24ddb21e20ba07 -->
