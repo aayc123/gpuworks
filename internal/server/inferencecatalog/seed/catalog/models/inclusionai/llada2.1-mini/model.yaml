@@ -38,11 +38,27 @@ specs:
   - --attention-backend
   - flashinfer
   # Decode CUDA graph stays on, capped at batch 8; prefill graph capture is
-  # still disabled because this model needs it off (issue #35).
+  # disabled because enabling it OOMs on this model (issue #35).
   # Verified on SGLang 0.5.21 (runner cuda13.0-sglang0.5.21-r2), 2x RTX 3090,
-  # TP2, with the JIT grouped-top-k router above. This profile used
-  # --disable-cuda-graph before because uncapped capture was too large; keep
-  # the cap, and re-check before raising it or enabling prefill capture.
+  # TP2, with the JIT grouped-top-k router above, 2026-11-19.
+  #
+  # Prefill graph: must stay disabled. With --cuda-graph-backend-prefill left
+  # unset (default breakable backend), capture OOMs on the 17th of 50 token
+  # buckets (num_tokens=704) inside graph.capture_end() with
+  # "CUDA error: out of memory". At --mem-fraction-static=0.88 only ~2.27 GiB
+  # remains per GPU after KV cache allocation (~1.84 GiB at capture begin).
+  # The visible "num_active_captures_ > 0 INTERNAL ASSERT FAILED" is a secondary
+  # assertion raised after the first capture_end() already failed; treat the
+  # OOM as the root cause, not the assert. 2/2 reproductions on 2026-11-19.
+  # Re-check after an SGLang/torch bump: launch once without
+  # --cuda-graph-backend-prefill disabled.
+  #
+  # Decode graph: kept on to avoid the per-step launch overhead, but capped at
+  # batch 8 (--cuda-graph-max-bs-decode=8) because uncapped capture is too
+  # large on this model/GPU (issue #35). Do not re-add --disable-cuda-graph:
+  # it is a global switch and would also turn off the decode graph, making the
+  # two flags below no-ops. Re-check before raising the cap or enabling prefill
+  # capture.
   - --cuda-graph-backend-prefill
   - disabled
   - --cuda-graph-max-bs-decode
